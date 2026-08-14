@@ -29,13 +29,13 @@ function fakeFetch(routes: Map<string, unknown>, behavior?: { failNext?: number 
 
 describe("createHttpMailbox", () => {
   it("POSTs payloads and returns the index", async () => {
-    const routes = new Map<string, unknown>([["POST /api/mailbox/go", { i: 7 }]]);
+    const routes = new Map<string, unknown>([["POST /api/mailbox?route=go", { i: 7 }]]);
     const mailbox = createHttpMailbox("/api/mailbox", fakeFetch(routes));
     await expect(mailbox.put("go", "hello")).resolves.toBe(7);
   });
 
   it("GETs pages with the since cursor", async () => {
-    const routes = new Map<string, unknown>([["GET /api/mailbox/ice?since=3", { entries: [{ i: 4, p: "x", ts: 1 }], now: 4, ttlSeconds: 599 }]]);
+    const routes = new Map<string, unknown>([["GET /api/mailbox?route=ice&since=3", { entries: [{ i: 4, p: "x", ts: 1 }], now: 4, ttlSeconds: 599 }]]);
     const mailbox = createHttpMailbox("/api/mailbox", fakeFetch(routes));
     const page = await mailbox.get("ice", 3);
     expect(page.entries).toHaveLength(1);
@@ -54,7 +54,7 @@ describe("createHttpMailbox", () => {
   });
 
   it("probe returns false on failure and true on ok", async () => {
-    const routes = new Map<string, unknown>([["GET /api/mailbox/ping", { ok: true }]]);
+    const routes = new Map<string, unknown>([["GET /api/mailbox?route=ping", { ok: true }]]);
     await expect(probeMailbox("/api/mailbox", fakeFetch(routes))).resolves.toBe(true);
     await expect(probeMailbox("/api/mailbox", fakeFetch(new Map()))).resolves.toBe(false);
   });
@@ -135,7 +135,7 @@ describe("MailboxPoller", () => {
     const fetchImpl = fakeFetch(routes, behavior);
     const mailbox = createHttpMailbox("/api/mailbox", fetchImpl);
     const p = putWithRetry(mailbox, "go", "x");
-    routes.set("POST /api/mailbox/go", { i: 1 });
+    routes.set("POST /api/mailbox?route=go", { i: 1 });
     await expect(p).resolves.toBe(true);
   });
 

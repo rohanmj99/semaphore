@@ -7,10 +7,12 @@ import type { MailboxEntry } from "../core/mailbox.ts";
 // is kept in sync with core/mailbox-store.ts, which the tests and the dev
 // server (scripts/dev-mailbox.ts) import directly.
 //
-// The handler lives at the top-level catch-all (api/[...route].ts) and strips
-// the "mailbox" prefix itself: nested catch-all files (api/mailbox/[...route].ts)
-// deployed as single-segment routes on Vercel, so the mailbox URLs were never
-// reachable as designed.
+// Routing: catch-all files (api/[...route].ts) deploy as single-segment
+// routes on this project, so the mailbox lives at the exact path /api/mailbox
+// and receives its segments through the query string:
+//   - vercel.json rewrites /api/mailbox/<...> to /api/mailbox?path=<...>
+//   - the client also speaks query style directly (?route=a&route=b)
+// Both are parsed below, so the function works with or without the rewrite.
 
 interface MailboxStore {
   list(key: string): Promise<MailboxEntry[]>;
@@ -207,6 +209,24 @@ function getStore(): MailboxStore {
   return store;
 }
 
+function decodeSeg(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
+/** Route segments from the rewrite (?path=a/b) or the client (?route=a&route=b). */
+function routeFromQuery(query: VercelRequest["query"]): string[] {
+  const pathRaw = typeof query.path === "string" ? query.path : null;
+  if (pathRaw !== null) {
+    return pathRaw.split("/").filter(Boolean).map(decodeSeg);
+  }
+  const routeRaw = query.route;
+  return (Array.isArray(routeRaw) ? routeRaw : routeRaw ? [routeRaw] : []).map(decodeSeg);
+}
+
 function corsHeaders(res: VercelResponse): void {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -217,14 +237,7 @@ function corsHeaders(res: VercelResponse): void {
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   corsHeaders(res);
-  const routeRaw = req.query.route;
-  const route = (Array.isArray(routeRaw) ? routeRaw : routeRaw ? [routeRaw] : []).map((r) => decodeURIComponent(r));
-  if (route[0] !== "mailbox") {
-    res.status(404);
-    res.json({ error: "not found" });
-    return;
-  }
-  const mailboxRoute = route.slice(1);
+  const route = routeFromQuery(req.query);
   const sinceRaw = typeof req.query.since === "string" ? Number(req.query.since) : null;
   const since = sinceRaw !== null && Number.isFinite(sinceRaw) ? sinceRaw : null;
 
@@ -245,7 +258,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const resp = await resolveMailbox(getStore(), {
-    route: mailboxRoute,
+    route,
     method: req.method ?? "GET",
     since,
     payload,

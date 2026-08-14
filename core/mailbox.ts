@@ -56,7 +56,11 @@ export function createHttpMailbox(apiBase: string, fetchImpl: FetchLike = global
 
   return {
     async put(kind, payload) {
-      const url = `${apiBase}/${kind}`;
+      // Route segments travel in the query string: the deployed function
+      // lives at the exact path /api/mailbox (catch-all routes compile to
+      // single segments on this project), and vercel.json additionally
+      // rewrites /api/mailbox/<...> onto the same ?path=<...> query.
+      const url = `${apiBase}?route=${encodeURIComponent(kind)}`;
       const res = await request(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -70,8 +74,8 @@ export function createHttpMailbox(apiBase: string, fetchImpl: FetchLike = global
       return i;
     },
     async get(kind, since = 0) {
-      const tail = since > 0 ? `?since=${since}` : "";
-      const res = await request(`${apiBase}/${kind}${tail}`, { method: "GET" });
+      const tail = since > 0 ? `&since=${since}` : "";
+      const res = await request(`${apiBase}?route=${encodeURIComponent(kind)}${tail}`, { method: "GET" });
       if (!res.ok) {
         if (res.status === 404) return { entries: [], now: 0, ttlSeconds: null };
         throw new MailboxHttpError(res.status, `mailbox read failed (${res.status})`);
@@ -88,7 +92,7 @@ export function createHttpMailbox(apiBase: string, fetchImpl: FetchLike = global
 
 export async function probeMailbox(apiBase: string, fetchImpl: FetchLike = globalThis.fetch.bind(globalThis), timeoutMs = 3000): Promise<boolean> {
   try {
-    const res = await fetchImpl(`${apiBase}/ping`, { method: "GET", signal: abortAfter(timeoutMs) });
+    const res = await fetchImpl(`${apiBase}?route=ping`, { method: "GET", signal: abortAfter(timeoutMs) });
     return res.ok;
   } catch {
     return false;

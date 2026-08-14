@@ -10,8 +10,16 @@ export function devMailbox() {
       return;
     }
     const [pathname, query] = req.url.split("?");
-    const route = pathname.replace(/^\/api\/mailbox/, "").split("/").filter(Boolean).map(decodeURIComponent);
     const qs = new URLSearchParams(query ?? "");
+    const pathSegs = pathname.replace(/^\/api\/mailbox/, "").split("/").filter(Boolean).map(decodeURIComponent);
+    const routeQuery = qs.getAll("route");
+    const pathQuery = qs.get("path");
+    const route =
+      routeQuery.length > 0
+        ? routeQuery.map(decodeURIComponent)
+        : pathQuery !== null
+          ? pathQuery.split("/").filter(Boolean).map(decodeURIComponent)
+          : pathSegs;
     const sinceRaw = qs.get("since");
     const since = sinceRaw !== null && Number.isFinite(Number(sinceRaw)) ? Number(sinceRaw) : null;
     let body = "";
