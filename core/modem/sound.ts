@@ -165,7 +165,7 @@ function analyseBuffer(ctx: AudioContext, analyser: AnalyserNode, dest: Float32A
  */
 export function startMicDecoder(
   onFrame: (frame: ModemFrame) => void,
-  opts: { quiet?: boolean; sourceFn?: () => Float64Array } = {},
+  opts: { quiet?: boolean; sourceFn?: () => Float64Array; onError?: (message: string) => void } = {},
 ): MicDecoderHandle {
   const quiet = !!opts.quiet;
   const demod = new Demodulator(quiet);
@@ -189,7 +189,11 @@ export function startMicDecoder(
 
   const Ctor = audioCtor();
   const micOK = canGetUserMedia();
-  if (Ctor && micOK) {
+  if (!Ctor || !micOK) {
+    queueMicrotask(() => {
+      if (!stopped) opts.onError?.("Microphone isn\u2019t supported in this browser.");
+    });
+  } else {
     Promise.resolve()
       .then(
         () =>
@@ -237,7 +241,7 @@ export function startMicDecoder(
         raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame(step) : 0;
       })
       .catch(() => {
-        /* permission denied — read-only handle with zeroed stats */
+        if (!stopped) opts.onError?.("Microphone access was blocked. Allow mic permission to hear tones.");
       });
   }
 
@@ -390,6 +394,7 @@ export interface SoundTransportOptions {
   quiet?: boolean;
   tx?: boolean;
   rx?: boolean;
+  onMicError?: (message: string) => void;
 }
 
 export class SoundTransport implements TransportEndpoint {
@@ -397,6 +402,7 @@ export class SoundTransport implements TransportEndpoint {
   readonly id = nextId();
   private readonly quiet: boolean;
   private readonly txOn: boolean;
+  private readonly onMicError?: (message: string) => void;
   private readonly player: SoundPlayer;
   private readonly reassembler: FragmentReassembler;
   private readonly parser = new FrameParser();
@@ -409,6 +415,7 @@ export class SoundTransport implements TransportEndpoint {
   constructor(opts: SoundTransportOptions = {}) {
     this.quiet = !!opts.quiet;
     this.txOn = opts.tx !== false;
+    this.onMicError = opts.onMicError;
     this.player = new SoundPlayer();
     this.reassembler = new FragmentReassembler(this.quiet);
     if (opts.rx) this.startRx();
@@ -429,7 +436,7 @@ export class SoundTransport implements TransportEndpoint {
   private startRx(): void {
     this.mic = startMicDecoder(
       (frame) => this.onModemFrame(frame),
-      { quiet: this.quiet },
+      { quiet: this.quiet, onError: this.onMicError },
     );
   }
 
@@ -756,7 +763,7 @@ export function scanSoundSessions(
   opts: SoundAnnounceOptions = {},
 ): SoundScanHandle {
   const quiet = !!opts.quiet;
-  const rx = new SoundTransport({ quiet, tx: false, rx: true });
+  const rx = new SoundTransport({ quiet, tx: false, rx: true, onMicError: onError });
   const parser = new FrameParser();
   const map = new Map<string, VisibleSession>();
   let stopped = false;

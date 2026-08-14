@@ -1,19 +1,12 @@
-import type { VercelRequest, VercelResponse } from "@vercel/node";
-import type { MailboxEntry } from "../../core/mailbox.ts";
+import type { MailboxEntry } from "./mailbox.ts";
 
-// Self-contained mailbox function. Vercel deploys each api file compiled on
-// its own, so this entry must not import any sibling .ts module at runtime —
-// only type imports (stripped at compile) are allowed. The store logic below
-// is kept in sync with api/mailbox-store.ts, which the tests and the dev
-// server (scripts/dev-mailbox.ts) import directly.
-
-interface MailboxStore {
+export interface MailboxStore {
   list(key: string): Promise<MailboxEntry[]>;
   append(key: string, payload: string, ttlSeconds: number): Promise<number>;
   ttlOf(key: string): Promise<number | null>;
 }
 
-class MemoryMailboxStore implements MailboxStore {
+export class MemoryMailboxStore implements MailboxStore {
   private map = new Map<string, { entries: MailboxEntry[]; expiresAt: number }>();
 
   async list(key: string): Promise<MailboxEntry[]> {
@@ -45,14 +38,14 @@ class MemoryMailboxStore implements MailboxStore {
   }
 }
 
-interface KvsClient {
+export interface KvsClient {
   zrange(key: string, start: number, stop: number): Promise<string[]>;
   zadd(key: string, score: number, member: string): Promise<void>;
   expire(key: string, seconds: number): Promise<void>;
   ttl(key: string): Promise<number>;
 }
 
-class KvMailboxStore implements MailboxStore {
+export class KvMailboxStore implements MailboxStore {
   constructor(private readonly kv: KvsClient) {}
 
   async list(key: string): Promise<MailboxEntry[]> {
@@ -70,7 +63,7 @@ class KvMailboxStore implements MailboxStore {
     return entries;
   }
 
-  async append(key: string, payload: string, ttlSeconds: number): Promise<number> {
+async append(key: string, payload: string, ttlSeconds: number): Promise<number> {
     const entries = await this.list(key);
     const i = entries.length > 0 ? entries[entries.length - 1].i + 1 : 1;
     await this.kv.zadd(key, i, JSON.stringify({ i, p: payload, ts: Date.now() }));
@@ -85,7 +78,7 @@ class KvMailboxStore implements MailboxStore {
   }
 }
 
-function kvFromEnv(): KvsClient | null {
+export function kvFromEnv(): KvsClient | null {
   const url = process.env.KV_REST_API_URL;
   const token = process.env.KV_REST_API_TOKEN;
   if (!url || !token) return null;
@@ -124,18 +117,18 @@ async function kvFetch(baseUrl: string, token: string, args: unknown[]): Promise
   return res.json();
 }
 
-const MAILBOX_KINDS = ["announce", "peer", "go", "ready", "offer", "answer", "ice"] as const;
-const MAX_PAYLOAD_CHARS = 100_000;
-const SESSION_ID_RE = /^[0-9a-f]{16}$/;
+export const MAILBOX_KINDS = ["announce", "peer", "go", "ready", "offer", "answer", "ice"] as const;
+export const MAX_PAYLOAD_CHARS = 100_000;
+export const SESSION_ID_RE = /^[0-9a-f]{16}$/;
 
-interface MailboxRequest {
+export interface MailboxRequest {
   route: string[];
   method: string;
   since: number | null;
   payload: string | null;
 }
 
-interface MailboxResponse {
+export interface MailboxResponse {
   status: number;
   json: unknown;
 }
@@ -144,7 +137,7 @@ function keyOf(sessionId: string, kind: string): string {
   return `mailbox:${sessionId}:${kind}`;
 }
 
-async function resolveMailbox(store: MailboxStore, req: MailboxRequest, ttlSeconds = 600): Promise<MailboxResponse> {
+export async function resolveMailbox(store: MailboxStore, req: MailboxRequest, ttlSeconds = 600): Promise<MailboxResponse> {
   const { route, method } = req;
   if (method === "OPTIONS") {
     return { status: 204, json: null };
@@ -190,60 +183,7 @@ async function resolveMailbox(store: MailboxStore, req: MailboxRequest, ttlSecon
   return { status: 405, json: { error: "method not allowed" } };
 }
 
-function createStore(): MailboxStore {
+export function createStore(): MailboxStore {
   const kv = kvFromEnv();
   return kv ? new KvMailboxStore(kv) : new MemoryMailboxStore();
-}
-
-let store: MailboxStore | null = null;
-
-function getStore(): MailboxStore {
-  if (!store) store = createStore();
-  return store;
-}
-
-function corsHeaders(res: VercelResponse): void {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  res.setHeader("Cache-Control", "no-store");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-}
-
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  corsHeaders(res);
-  const routeRaw = req.query.route;
-  const route = (Array.isArray(routeRaw) ? routeRaw : routeRaw ? [routeRaw] : []).map((r) => decodeURIComponent(r));
-  const sinceRaw = typeof req.query.since === "string" ? Number(req.query.since) : null;
-  const since = sinceRaw !== null && Number.isFinite(sinceRaw) ? sinceRaw : null;
-
-  let payload: string | null = null;
-  if (req.method === "POST") {
-    let body: unknown = req.body;
-    if (typeof body === "string") {
-      try {
-        body = JSON.parse(body);
-      } catch {
-        body = null;
-      }
-    }
-    if (body && typeof body === "object") {
-      const p = (body as { p?: unknown }).p;
-      if (typeof p === "string") payload = p;
-    }
-  }
-
-  const resp = await resolveMailbox(getStore(), {
-    route,
-    method: req.method ?? "GET",
-    since,
-    payload,
-  });
-
-  res.status(resp.status);
-  if (resp.status === 204) {
-    res.end();
-    return;
-  }
-  res.json(resp.json);
 }

@@ -5,7 +5,19 @@ Update this file at the end of every working session. Dates below are session da
 
 ---
 
-## Latest state — 2026-08-14 (session resumed: sound + light channels wired end-to-end, 104 tests green)
+## Latest state — 2026-08-14 (production fixes: Vercel api 404, manual receive channels, permission prompts)
+
+### 2026-08-14 evening — production debugging round (pushed c928014 → next commit)
+- **Vercel api 404s (`/api/mailbox/ping`)**: the nested catch-all `api/mailbox/[...route].ts` *was* routing (the old runtime `Cannot find module mailbox-store.ts` error proved the function ran), but per-file deployments can't resolve sibling/cross-dir modules at runtime, and `.js` specifiers broke Vercel's tsc step (`bundler` resolution doesn't map `.js`→`.ts`; also discovered `../core/x.ts` from `api/mailbox/` resolves to `api/core/x.ts` — wrong depth). **Fix: the route is now fully self-contained** — store logic inlined into `api/mailbox/[...route].ts`, only `import type`s remain (stripped at compile; verified esbuild emit = zero imports, `export { handler as default }`).
+- **`api/mailbox-store.ts` + `api/mailbox.test.ts` moved to `core/`** (`core/mailbox-store.ts`, `core/mailbox-store.test.ts`) so Vercel never compiles non-route files; `scripts/dev-mailbox.ts` and `core/online.test.ts` imports updated (`./mailbox-store.ts`).
+- **Receive is now manual**: listen screen has channel toggles — Nearby tabs (default on, loopback), Microphone (asks for mic permission on click), Camera (asks for camera permission on click). Permission pre-flight happens in the click handler (user gesture → prompt reliably appears; the old effect-based auto-start never prompted on some browsers and was gated behind `pairingSupported()` which blocked everything when BroadcastChannel was missing). Scanner lifecycle keyed to toggles + screen; camera/mic released when a session is picked.
+- **Error surfacing**: `startMicDecoder` now accepts `onError` (fired on unsupported/blocked mic), `SoundTransportOptions.onMicError`, `scanSoundSessions` wires it; light already had `onError`. Listen screen shows a `hint.warn` banner with permission problems.
+- **Gating fixes (from earlier round)**: `canGetUserMedia()` no longer requires `getUserMedia.length === 0` (that disabled mic listening on every browser); `lightSupported()` no longer requires `window.VideoFrame` (Safari/Firefox camera receive now works via the drawImage fallback).
+- **sw.js**: bumped to `semaphore-v2`; navigations are now network-first (stale `semaphore-v1` shell was serving the old "coming soon" bundle on returning devices); cleanup now actually deletes old caches.
+- Verification: `npm run typecheck` (0 errors), `npm test` (104 tests), `npm run build` all pass; esbuild transpile of the route shows zero runtime imports.
+- Remaining gaps (unchanged): >4 GB bigint sizes, >10 MB ETA warning, text quick-mode / Copy-as-text / Re-send, Vercel KV env smoke-test against real Upstash, e2e matrix / Lighthouse.
+
+---
 
 ### Stage 4/5 (sound + light channels) fully wired — supersedes "gated coming soon" notes below
 - Verification: `npm run typecheck`, `npm test` (104 tests, 13 files), `npm run build` all pass; `vercel-deploy` folder synced (incl. new `dijkstrajs` dep) and builds.

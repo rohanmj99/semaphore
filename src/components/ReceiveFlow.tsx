@@ -63,12 +63,59 @@ export function ReceiveFlow() {
   const resetReceiver = useApp((s) => s.resetReceiver);
   const setMode = useApp((s) => s.setMode);
   const controllerRef = useRef<ReceiveController | null>(null);
-  const [unsupported] = useState(() => !pairingSupported());
   const [linkInput, setLinkInput] = useState("");
   const [opening, setOpening] = useState(false);
   const consumedLink = useRef(false);
   const chosenChannel = useRef<ScannedSession["channel"] | "online" | null>(null);
   const [scanIssue, setScanIssue] = useState("");
+  const [nearbyOn, setNearbyOn] = useState(true);
+  const [micOn, setMicOn] = useState(false);
+  const [camOn, setCamOn] = useState(false);
+  const [pendingPermission, setPendingPermission] = useState<"mic" | "cam" | null>(null);
+
+  const toggleMic = async () => {
+    if (micOn) {
+      setMicOn(false);
+      return;
+    }
+    if (typeof navigator.mediaDevices?.getUserMedia !== "function") {
+      setScanIssue("Microphone isn't available in this browser.");
+      return;
+    }
+    setPendingPermission("mic");
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+      s.getTracks().forEach((t) => t.stop());
+      setMicOn(true);
+    } catch {
+      setScanIssue("Microphone access was blocked. Allow mic permission in the browser to receive tones.");
+    } finally {
+      setPendingPermission(null);
+    }
+  };
+
+  const toggleCam = async () => {
+    if (camOn) {
+      setCamOn(false);
+      return;
+    }
+    if (typeof navigator.mediaDevices?.getUserMedia !== "function") {
+      setScanIssue("Camera isn't available in this browser.");
+      return;
+    }
+    setPendingPermission("cam");
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+      });
+      s.getTracks().forEach((t) => t.stop());
+      setCamOn(true);
+    } catch {
+      setScanIssue("Camera access was blocked. Allow camera permission in the browser to receive screen flashes.");
+    } finally {
+      setPendingPermission(null);
+    }
+  };
 
   useEffect(() => {
     if (consumedLink.current) return;
@@ -82,7 +129,6 @@ export function ReceiveFlow() {
   }, []);
 
   useEffect(() => {
-    if (unsupported) return;
     if (useApp.getState().receiver.screen !== "listen") return;
     setScanIssue("");
     const byId = new Map<string, ScannedSession>();
@@ -101,25 +147,24 @@ export function ReceiveFlow() {
     const note = (msg: string) =>
       setScanIssue((prev) => (prev.includes(msg) ? prev : `${prev ? `${prev} ` : ""}${msg}`));
     const stops: Array<() => void> = [];
-    if (pairingSupported()) stops.push(scanForSessions((l) => tag(l, "loopback")));
-    if (soundRxSupport()) {
+    if (nearbyOn && pairingSupported()) stops.push(scanForSessions((l) => tag(l, "loopback")));
+    if (micOn && soundRxSupport()) {
       stops.push(() =>
         scanSoundSessions((l) => tag(l, "sound"), note).stop(),
       );
     }
-    if (lightSupported()) {
+    if (camOn && lightSupported()) {
       stops.push(() =>
         scanLightSessions((l) => tag(l, "light"), note).stop(),
       );
     }
     return () => {
       for (const stop of stops) stop();
-      chosenChannel.current = null;
     };
-    // Keyed by screen so the camera + mic are only active while the user is
-    // actually on the listen screen (they are released as soon as a session
-    // is picked and the matcher's own channel camera/mic take over).
-  }, [unsupported, setReceiver, receiver.screen]);
+    // Keyed by screen + toggles so the camera + mic are only active while the
+    // user is listening; they are released as soon as a session is picked and
+    // the matcher's own channel camera/mic take over.
+  }, [setReceiver, receiver.screen, nearbyOn, micOn, camOn]);
 
   useEffect(() => {
     if (receiver.screen !== "transfer") return;
@@ -230,77 +275,117 @@ export function ReceiveFlow() {
       {receiver.screen === "listen" && (
         <>
           <h2>Receive</h2>
-          {unsupported ? (
-            <div className="errorbox" role="alert">
-              Nearby pairing isn't available in this browser.
-            </div>
+          <p className="hint">
+            Turn on a channel to start listening, then pick the same channel on the sending
+            device. You'll be asked for permission the first time.
+          </p>
+          <div className="channeltoggles">
+            {pairingSupported() && (
+              <button
+                type="button"
+                className={`channeltoggle ${nearbyOn ? "on" : ""}`}
+                aria-pressed={nearbyOn}
+                onClick={() => setNearbyOn((v) => !v)}
+              >
+                <span className="ct-name">Nearby tabs</span>
+                <span className="ct-desc">Sessions announced by this same browser</span>
+                <span className="ct-state">{nearbyOn ? "listening" : "off"}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              className={`channeltoggle ${micOn ? "on" : ""}`}
+              aria-pressed={micOn}
+              disabled={pendingPermission !== null}
+              onClick={() => void toggleMic()}
+            >
+              <span className="ct-name">Microphone · tone bursts</span>
+              <span className="ct-desc">
+                Hear sessions announced as sound from another device's speaker
+              </span>
+              <span className="ct-state">
+                {micOn ? "listening" : pendingPermission === "mic" ? "asking for mic…" : "off"}
+              </span>
+            </button>
+            <button
+              type="button"
+              className={`channeltoggle ${camOn ? "on" : ""}`}
+              aria-pressed={camOn}
+              disabled={pendingPermission !== null}
+              onClick={() => void toggleCam()}
+            >
+              <span className="ct-name">Camera · screen flash</span>
+              <span className="ct-desc">See sessions announced as flashing QR codes</span>
+              <span className="ct-state">
+                {camOn ? "listening" : pendingPermission === "cam" ? "asking for camera…" : "off"}
+              </span>
+            </button>
+          </div>
+          {scanIssue ? (
+            <p className="hint warn" role="alert">
+              {scanIssue}
+            </p>
+          ) : null}
+          {nearbyOn || micOn || camOn ? (
+            receiver.sessions.length > 0 ? (
+              <div className="sessions">
+                {receiver.sessions.map((s) => (
+                  <button
+                    key={s.sessionId}
+                    type="button"
+                    className="sessionbtn card"
+                    onClick={() => void pickSession(s as ScannedSession)}
+                  >
+                    <WordChips pair={s.wordPair} />
+                    <span className="sessiontag">{CHANNEL_TAG[(s as ScannedSession).channel] ?? "nearby"}</span>
+                    <span className="hint">
+                      {s.file ? `${s.file.name} · ${fmtBytes(s.file.size)}` : "Spot the session"}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="hint" aria-live="polite">
+                Waiting for a sender. On the other device choose Send and pick the same channel.
+                Hold the screens close together (camera to screen for flash, speaker to this
+                device for sound).
+              </p>
+            )
           ) : (
-            <>
-              <div className="live">
-                <IconEar className="big pulse" />
-                <div className="livelabel">Listening for a nearby sender</div>
-              </div>
-              {receiver.sessions.length > 0 ? (
-                <div className="sessions">
-                  {receiver.sessions.map((s) => (
-                    <button
-                      key={s.sessionId}
-                      type="button"
-                      className="sessionbtn card"
-                      onClick={() => void pickSession(s as ScannedSession)}
-                    >
-                      <WordChips pair={s.wordPair} />
-                      <span className="sessiontag">{CHANNEL_TAG[(s as ScannedSession).channel] ?? "nearby"}</span>
-                      <span className="hint">
-                        {s.file ? `${s.file.name} · ${fmtBytes(s.file.size)}` : "Spot the session"}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <p className="hint" aria-live="polite">
-                  Waiting for a sender. This device is listening with your camera (screen-flash
-                  QR), your microphone (sound tones), and nearby open tabs. On the other device
-                  choose Send and pick the same channel.
-                </p>
-              )}
-              {scanIssue ? (
-                <p className="hint warn" role="alert">
-                  {scanIssue}
-                </p>
-              ) : null}
-              <div className="linkentry">
-                <label htmlFor="link-input" className="visually-hidden">
-                  Paste a Semaphore link
-                </label>
-                <input
-                  id="link-input"
-                  type="text"
-                  placeholder="Or paste an online link"
-                  value={linkInput}
-                  disabled={opening}
-                  onChange={(e) => setLinkInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && sessionIdFromLink(linkInput)) {
-                      void startOnline(sessionIdFromLink(linkInput) as string);
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  className="ghost"
-                  disabled={opening || !sessionIdFromLink(linkInput)}
-                  onClick={() => {
-                    const id = sessionIdFromLink(linkInput);
-                    if (id) void startOnline(id);
-                  }}
-                >
-                  <IconCopy />
-                  Open link
-                </button>
-              </div>
-            </>
+            <p className="hint" aria-live="polite">
+              Enable a channel above to start listening.
+            </p>
           )}
+          <div className="linkentry">
+            <label htmlFor="link-input" className="visually-hidden">
+              Paste a Semaphore link
+            </label>
+            <input
+              id="link-input"
+              type="text"
+              placeholder="Or paste an online link"
+              value={linkInput}
+              disabled={opening}
+              onChange={(e) => setLinkInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && sessionIdFromLink(linkInput)) {
+                  void startOnline(sessionIdFromLink(linkInput) as string);
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="ghost"
+              disabled={opening || !sessionIdFromLink(linkInput)}
+              onClick={() => {
+                const id = sessionIdFromLink(linkInput);
+                if (id) void startOnline(id);
+              }}
+            >
+              <IconCopy />
+              Open link
+            </button>
+          </div>
           <div className="spacer" />
           <button type="button" className="ghost" onClick={backToLanding}>
             <IconBack />

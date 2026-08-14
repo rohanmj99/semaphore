@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MemoryMailboxStore, resolveMailbox } from "../api/mailbox-store.ts";
+import { MemoryMailboxStore, resolveMailbox } from "./mailbox-store.ts";
 import type { Mailbox, MailboxEntry } from "./mailbox.ts";
 import { DataChannelTransport } from "./webrtc.ts";
 import { advertiseOnline, fetchAnnouncement, matchOnlineSession } from "./online.ts";

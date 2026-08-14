@@ -113,6 +113,57 @@ h2 {
   margin-top: 0.75rem;
 }
 
+.channeltoggles {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin: 0.75rem 0;
+}
+
+.channeltoggle {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.25rem 0.75rem;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  border-radius: 0.75rem;
+  padding: 0.7rem 0.85rem;
+  background: color-mix(in srgb, var(--bg, #fff) 80%, transparent);
+  cursor: pointer;
+}
+
+.channeltoggle .ct-name {
+  font-weight: 600;
+}
+
+.channeltoggle .ct-desc {
+  grid-column: 1 / -1;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.channeltoggle .ct-state {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.channeltoggle.on {
+  border-color: var(--accent, #2563eb);
+  background: color-mix(in srgb, var(--accent, #2563eb) 12%, transparent);
+}
+
+.channeltoggle.on .ct-state {
+  color: var(--accent, #2563eb);
+  font-weight: 600;
+}
+
+.channeltoggle:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .mono {
   font-variant-numeric: tabular-nums;
 }

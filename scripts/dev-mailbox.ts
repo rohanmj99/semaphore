@@ -1,6 +1,6 @@
 import type { Connect } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { MemoryMailboxStore, resolveMailbox } from "../api/mailbox-store.ts";
+import { MemoryMailboxStore, resolveMailbox } from "../core/mailbox-store.ts";
 
 export function devMailbox() {
   const store = new MemoryMailboxStore();
