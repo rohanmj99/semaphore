@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { MemoryMailboxStore, resolveMailbox, type MailboxRequest, type MailboxStore } from "./mailbox-store.ts";
+import {
+  KvMailboxStore,
+  kvFromEnv,
+  MemoryMailboxStore,
+  resolveMailbox,
+  type MailboxRequest,
+  type MailboxStore,
+  type KvsClient,
+} from "./mailbox-store.ts";
 
 const SID = "0123456789abcdef";
 
@@ -93,5 +101,70 @@ describe("resolveMailbox", () => {
     expect((after.json as { entries: unknown[] }).entries).toHaveLength(2);
     expect((after.json as { ttlSeconds: number | null }).ttlSeconds).toBeTruthy();
     expect(ttl1.ttlSeconds).toBeTruthy();
+  });
+});
+
+function fakeKv(calls: string[]): KvsClient {
+  return {
+    async zrange(_key, _start, _stop) {
+      calls.push("zrange");
+      return [];
+    },
+    async zadd(_key, _score, _member) {
+      calls.push("zadd");
+    },
+    async expire(_key, _seconds) {
+      calls.push("expire");
+    },
+    async ttl(_key) {
+      calls.push("ttl");
+      return -2;
+    },
+  };
+}
+
+describe("KvMailboxStore", () => {
+  it("routes z-set calls and computes sequence numbers", async () => {
+    const calls: string[] = [];
+    const store = new KvMailboxStore(fakeKv(calls));
+    await resolveMailbox(store, req({ route: [SID, "ice"], method: "POST", payload: "one" }), 60);
+    expect(calls).toEqual(["zrange", "zadd", "expire"]);
+    expect((await get(store, [SID, "ice"])).status).toBe(200);
+    expect(calls).toEqual(["zrange", "zadd", "expire", "zrange", "ttl"]);
+  });
+});
+
+describe("kvFromEnv", () => {
+  it("builds Upstash REST URLs with the key in the path", async () => {
+    const envUrl = process.env.KV_REST_API_URL;
+    const envToken = process.env.KV_REST_API_TOKEN;
+    process.env.KV_REST_API_URL = "https://unit-test.upstash.io";
+    process.env.KV_REST_API_TOKEN = "tok";
+    const seen: string[] = [];
+    const origFetch = globalThis.fetch;
+    (globalThis as { fetch: unknown }).fetch = (url: string | URL | Request) => {
+      seen.push(String(url));
+      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response);
+    };
+    try {
+      const kv = kvFromEnv();
+      expect(kv).not.toBeNull();
+      await kv!.zrange("mailbox:abc:go", 0, -1);
+      await kv!.zadd("mailbox:abc:go", 1, '{"i":1,"p":"hi"}');
+      await kv!.expire("mailbox:abc:go", 600);
+      await kv!.ttl("mailbox:abc:go");
+      expect(seen).toEqual([
+        "https://unit-test.upstash.io/zrange/mailbox%3Aabc%3Ago/0/-1?API_KEY=tok",
+        "https://unit-test.upstash.io/zadd/mailbox%3Aabc%3Ago/1/%7B%22i%22%3A1%2C%22p%22%3A%22hi%22%7D?API_KEY=tok",
+        "https://unit-test.upstash.io/expire/mailbox%3Aabc%3Ago/600?API_KEY=tok",
+        "https://unit-test.upstash.io/ttl/mailbox%3Aabc%3Ago?API_KEY=tok",
+      ]);
+    } finally {
+      (globalThis as { fetch: unknown }).fetch = origFetch;
+      if (envUrl === undefined) delete process.env.KV_REST_API_URL;
+      else process.env.KV_REST_API_URL = envUrl;
+      if (envToken === undefined) delete process.env.KV_REST_API_TOKEN;
+      else process.env.KV_REST_API_TOKEN = envToken;
+    }
   });
 });

@@ -97,19 +97,19 @@ function kvFromEnv(): KvsClient | null {
   const token = process.env.KV_REST_API_TOKEN;
   if (!url || !token) return null;
   return {
-    async zrange(_key, start, stop) {
-      const res = await kvFetch(url, token, ["zrange", start, stop]);
+    async zrange(key, start, stop) {
+      const res = await kvFetch(url, token, ["zrange", key, start, stop]);
       const members = Array.isArray(res) ? res : [];
       return members.filter((m): m is string => typeof m === "string");
     },
-    async zadd(_key, score, member) {
-      await kvFetch(url, token, ["zadd", score, member]);
+    async zadd(key, score, member) {
+      await kvFetch(url, token, ["zadd", key, score, member]);
     },
-    async expire(_key, seconds) {
-      await kvFetch(url, token, ["expire", seconds]).catch(() => {});
+    async expire(key, seconds) {
+      await kvFetch(url, token, ["expire", key, seconds]).catch(() => {});
     },
-    async ttl(_key) {
-      const res = await kvFetch(url, token, ["ttl"]);
+    async ttl(key) {
+      const res = await kvFetch(url, token, ["ttl", key]);
       const n = typeof res === "number" ? res : Number(String(res));
       return Number.isFinite(n) ? n : -2;
     },
