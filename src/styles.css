@@ -422,6 +422,29 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
+.qrcard {
+  display: block;
+  width: min(100%, 460px);
+  margin-inline: auto;
+  aspect-ratio: 1;
+  background: #fff;
+  border-radius: 14px;
+}
+
+.qrcard-wrap {
+  padding: 14px;
+}
+
+.sessiontag {
+  display: inline-block;
+  padding: 2px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
 .note {
   color: var(--accent);
   text-align: center;

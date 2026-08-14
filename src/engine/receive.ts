@@ -1,6 +1,8 @@
 import { matchSession, type VisibleSession } from "@core/pairing";
 import { matchOnlineSession, fetchAnnouncement } from "@core/online";
 import { StreamReceiver } from "@core/session";
+import { matchLightSession, type LightTransport } from "@core/qr/light";
+import { matchSoundSession } from "@core/modem/sound";
 import type { ManifestHeader, ProgressStats } from "@core/types";
 import type { NegotiatorState } from "@core/webrtc";
 import { crc32 } from "@core/crc32";
@@ -14,14 +16,23 @@ export interface ReceiveCallbacks {
   onNote?(note: string | null): void;
 }
 
-interface MatcherLike {
+export interface MatcherLike {
   readonly pin: { sessionId: string; sessionKey: Uint8Array; channel: import("@core/transports").TransportEndpoint } | null;
+  /** Light channel only: display transport for the match QR, null otherwise. */
+  readonly display?: LightTransport;
   confirm(): void;
   onGo(cb: () => void): void;
   postReady(): void;
   onState?(cb: (state: NegotiatorState) => void): void;
   onFailure?(cb: (message: string) => void): void;
   cancel(): void;
+}
+
+/** Matcher factory for one of the nearby channels (loopback/sound/light). */
+export function nearbyMatcher(session: VisibleSession, channel: "loopback" | "sound" | "light"): MatcherLike {
+  if (channel === "light") return matchLightSession(session);
+  if (channel === "sound") return matchSoundSession(session);
+  return matchSession(session);
 }
 
 const HEADER_TIMEOUT_MS = 30_000;
@@ -73,6 +84,11 @@ export class ReceiveController {
 
   get senderFingerprint(): string {
     return this.session.senderFingerprint;
+  }
+
+  /** Light channel: the transport whose current fragment is the match QR. */
+  get matchDisplay(): LightTransport | null {
+    return this.matcher.display ?? null;
   }
 
   confirm() {

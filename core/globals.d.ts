@@ -79,6 +79,26 @@ declare module "jsqr" {
   export default jsQR;
 }
 
+declare module "qrcode/lib/core/qrcode" {
+  interface QrBitMatrix {
+    size: number;
+    data: Uint8Array;
+  }
+  interface QrCreateOptions {
+    errorCorrectionLevel?: "L" | "M" | "Q" | "H";
+    version?: number;
+    maskPattern?: number;
+    toSJISFunc?: (codePoint: string) => number;
+  }
+  const QRCode: {
+    create(
+      data: string | Array<{ data: string | Uint8Array; mode?: string }>,
+      options?: QrCreateOptions,
+    ): { modules: QrBitMatrix; version: number };
+  };
+  export default QRCode;
+}
+
 declare module "qrcode" {
   interface QRCodeOptions {
     errorCorrectionLevel?: "L" | "M" | "Q" | "H";

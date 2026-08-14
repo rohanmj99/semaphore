@@ -56,6 +56,8 @@ export interface ProgressStats {
   etaMs: number | null;
   kbps: number;
   phase: TransferPhase;
+  /** Broadcast channels only: number of full passes cycled (1-based). */
+  passes?: number;
 }
 
 export type TransferPhase =

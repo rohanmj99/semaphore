@@ -31,6 +31,10 @@ export class FrameParser {
   get pending(): number {
     return this.buf.length;
   }
+
+  reset(): void {
+    this.buf = new Uint8Array(0);
+  }
 }
 
 export interface WireMessage {

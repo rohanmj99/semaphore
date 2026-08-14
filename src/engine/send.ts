@@ -1,12 +1,27 @@
 import { advertiseSender, pairingSupported } from "@core/pairing";
 import { advertiseOnline, type OnlineSender } from "@core/online";
 import { StreamSender } from "@core/session";
+import { advertiseLight, lightSupported, type LightSenderQueue, type LightTransport } from "@core/qr/light";
+import { advertiseSound, soundSupport, type SoundSenderQueue } from "@core/modem/sound";
 import type { SliceSource } from "@core/chunker";
 import type { ProgressStats } from "@core/types";
 import type { NegotiatorState } from "@core/webrtc";
 import { iceServersConfig, mailboxForSession, shareLinkFor } from "../config.ts";
 
-export type SendChannel = "loopback" | "online";
+export type SendChannel = "loopback" | "online" | "sound" | "light";
+
+export function channelSupported(channel: SendChannel): boolean {
+  switch (channel) {
+    case "loopback":
+      return pairingSupported();
+    case "online":
+      return typeof RTCPeerConnection !== "undefined";
+    case "sound":
+      return soundSupport();
+    case "light":
+      return lightSupported();
+  }
+}
 
 export interface SendCallbacks {
   onMatched(receiverFingerprint: string): void;
@@ -21,6 +36,8 @@ interface SendQueue {
   sessionId: string;
   wordPair: string;
   senderFingerprint: string;
+  /** Light channel only: the display transport the UI paints as an animated QR. */
+  display?: LightTransport;
   onMatch(cb: (peer: { receiverFingerprint: string }) => void): void;
   notifyGo(): void;
   start(
@@ -32,12 +49,19 @@ interface SendQueue {
 }
 
 const LINK_EXPIRY_MS = 10 * 60 * 1000;
+/** Broadcast chunk sizes — small so one message fits the channel's window. */
+const SOUND_CHUNK_BYTES = 4096;
+const LIGHT_CHUNK_BYTES = 8192;
+/** Broadcast mode: bounded cycle count; the UI shows guidance when done. */
+const NO_ACK_PASSES = 6;
 
 export class SendController {
   readonly wordPair: string;
   readonly senderFingerprint: string;
   readonly sessionId: string;
   readonly link: string | null = null;
+  /** Light channel: animated QR display transport, null on other channels. */
+  readonly display: LightTransport | null;
   private queue: SendQueue | null = null;
   private stream: StreamSender | null = null;
   private statsTimer: ReturnType<typeof setInterval> | null = null;
@@ -45,7 +69,7 @@ export class SendController {
   private settled = false;
   private completedHash: string | null = null;
 
-  constructor(readonly source: SliceSource, private readonly cb: SendCallbacks, channel: SendChannel = "loopback") {
+  constructor(readonly source: SliceSource, private readonly cb: SendCallbacks, private readonly channel: SendChannel = "loopback") {
     const file = { name: source.name ?? "file", size: source.size };
     if (channel === "online") {
       if (typeof RTCPeerConnection === "undefined") {
@@ -54,10 +78,17 @@ export class SendController {
       const online = advertiseOnline(file, mailboxForSession, { iceServers: iceServersConfig() });
       this.link = shareLinkFor(online.sessionId);
       this.queue = this.wrapOnline(online);
+    } else if (channel === "sound") {
+      if (!soundSupport()) throw new Error("Sound isn't available in this browser.");
+      this.queue = this.wrapSound(advertiseSound(file));
+    } else if (channel === "light") {
+      if (!lightSupported()) throw new Error("This browser can't do screen-flash transfers.");
+      this.queue = this.wrapLight(advertiseLight(file));
     } else {
       if (!pairingSupported()) throw new Error("This browser can't run nearby pairing.");
       this.queue = advertiseSender(file);
     }
+    this.display = this.queue.display ?? null;
     this.wordPair = this.queue.wordPair;
     this.senderFingerprint = this.queue.senderFingerprint;
     this.sessionId = this.queue.sessionId;
@@ -97,6 +128,57 @@ export class SendController {
     };
   }
 
+  private wrapSound(sound: SoundSenderQueue): SendQueue {
+    return {
+      sessionId: sound.sessionId,
+      wordPair: sound.wordPair,
+      senderFingerprint: sound.senderFingerprint,
+      onMatch(cb) {
+        sound.onMatch(cb);
+      },
+      notifyGo() {
+        sound.notifyGo();
+      },
+      start(cb) {
+        sound.start((keys) => {
+          cb({ sessionKey: keys.sessionKey, channel: keys.channel, receiverFingerprint: keys.receiverFingerprint });
+        });
+      },
+      onFailure(cb) {
+        sound.onFailure?.(cb);
+      },
+      stop() {
+        sound.stop();
+      },
+    };
+  }
+
+  private wrapLight(light: LightSenderQueue): SendQueue {
+    return {
+      sessionId: light.sessionId,
+      wordPair: light.wordPair,
+      senderFingerprint: light.senderFingerprint,
+      display: light.display,
+      onMatch(cb) {
+        light.onMatch(cb);
+      },
+      notifyGo() {
+        light.notifyGo();
+      },
+      start(cb) {
+        light.start((keys) => {
+          cb({ sessionKey: keys.sessionKey, channel: keys.channel, receiverFingerprint: keys.receiverFingerprint });
+        });
+      },
+      onFailure(cb) {
+        light.onFailure?.(cb);
+      },
+      stop() {
+        light.stop();
+      },
+    };
+  }
+
   private wireQueue(queue: SendQueue) {
     queue.onState?.((state) => {
       if (this.settled) return;
@@ -117,7 +199,11 @@ export class SendController {
     queue.start(({ sessionKey, channel }) => {
       if (this.settled) return;
       this.cb.onTransferring();
+      const broadcast = this.channel === "sound" || this.channel === "light";
       this.stream = new StreamSender(this.sessionId, sessionKey, this.source, {
+        noAck: broadcast,
+        chunkSize: broadcast ? (this.channel === "light" ? LIGHT_CHUNK_BYTES : SOUND_CHUNK_BYTES) : undefined,
+        maxPasses: broadcast ? NO_ACK_PASSES : undefined,
         onHeader: (h) => {
           this.completedHash = h.crc32.toString(16).padStart(8, "0");
         },

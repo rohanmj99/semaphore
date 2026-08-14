@@ -4,8 +4,11 @@ import { SendController, type SendChannel } from "../engine/send.ts";
 import { wakeLock } from "../engine/wakelock.ts";
 import { fileSource } from "@core/chunker";
 import { pairingSupported } from "@core/pairing";
+import { lightSupported } from "@core/qr/light";
+import { soundSupport } from "@core/modem/sound";
 import { fmtBytes, fmtDuration } from "@core/util";
 import { ProgressRing } from "./ProgressRing.tsx";
+import { QrCard } from "./QrCard.tsx";
 import {
   IconBack,
   IconCheck,
@@ -19,11 +22,18 @@ import {
 } from "../icons.tsx";
 
 const CHANNELS = [
-  { kind: "loopback", title: "This device", sub: "Two tabs on this computer", icon: IconDevice, soon: false },
-  { kind: "online", title: "Online link", sub: "Send a link — bytes go straight between devices", icon: IconOnline, soon: false },
-  { kind: "light", title: "Screen flash", sub: "Coming soon", icon: IconLight, soon: true },
-  { kind: "sound", title: "Sound", sub: "Coming soon", icon: IconSound, soon: true },
+  { kind: "loopback", title: "This device", sub: "Two tabs on this computer", icon: IconDevice },
+  { kind: "online", title: "Online link", sub: "Send a link — bytes go straight between devices", icon: IconOnline },
+  { kind: "light", title: "Screen flash", sub: "Two cameras, phone to screen", icon: IconLight },
+  { kind: "sound", title: "Sound", sub: "Tones through your speaker", icon: IconSound },
 ] as const;
+
+function channelUnsupported(kind: string): boolean {
+  if (kind === "loopback") return !pairingSupported();
+  if (kind === "sound") return !soundSupport();
+  if (kind === "light") return !lightSupported();
+  return false;
+}
 
 const PHASE_LABEL: Record<string, string> = {
   connecting: "Connecting",
@@ -197,12 +207,13 @@ export function SendFlow() {
               const Icon = c.icon;
               const relayDown = c.kind === "online" && onlineReady === false;
               const checking = c.kind === "online" && onlineReady === null;
+              const unsupported = channelUnsupported(c.kind);
               return (
                 <button
                   key={c.kind}
                   type="button"
                   className="channelbtn"
-                  disabled={c.soon || relayDown || checking}
+                  disabled={relayDown || checking || unsupported}
                   onClick={() => chooseChannel(c.kind as SendChannel)}
                 >
                   <Icon />
@@ -210,7 +221,11 @@ export function SendFlow() {
                     <span className="ctitle">{c.title}</span>
                     <br />
                     <span className="csub">
-                      {relayDown ? "Live relay unavailable — try again later" : c.sub}
+                      {relayDown
+                        ? "Live relay unavailable — try again later"
+                        : unsupported
+                          ? "Not available in this browser"
+                          : c.sub}
                     </span>
                   </span>
                 </button>
@@ -246,11 +261,30 @@ export function SendFlow() {
             </>
           ) : (
             <>
+              {sender.channel === "light" && controllerRef.current?.display && (
+                <div className="qrcard-wrap">
+                  <QrCard transport={controllerRef.current.display} />
+                </div>
+              )}
               <WordChips pair={sender.wordPair} />
-              <p className="hint">
-                On the other device, open Semaphore, choose <strong>Receive</strong>, and look for
-                this transfer. Both devices should show the same two words.
-              </p>
+              {sender.channel === "light" && (
+                <p className="hint">
+                  Hold the phones close, camera to screen. On the other device choose{" "}
+                  <strong>Receive</strong> — it should spot this transfer.
+                </p>
+              )}
+              {sender.channel === "sound" && (
+                <p className="hint">
+                  Tones are playing from this speaker — keep it near the other device. On the
+                  other device choose <strong>Receive</strong> — it should hear this transfer.
+                </p>
+              )}
+              {sender.channel !== "light" && sender.channel !== "sound" && (
+                <p className="hint">
+                  On the other device, open Semaphore, choose <strong>Receive</strong>, and look
+                  for this transfer. Both devices should show the same two words.
+                </p>
+              )}
             </>
           )}
           <div className="spacer" />
@@ -307,7 +341,9 @@ export function SendFlow() {
             </div>
           </div>
           <p className="hint">
-            The file is on the receiving device. Nothing was routed through a server.
+            {sender.channel === "light" || sender.channel === "sound"
+              ? "The transfer finished broadcasting. Check the receiving device to confirm it arrived."
+              : "The file is on the receiving device. Nothing was routed through a server."}
           </p>
           {sender.hash && <p className="hashbox">checksum {sender.hash}</p>}
           <div className="spacer" />
@@ -363,6 +399,11 @@ export function SendFlow() {
     const phase = stats?.phase ? PHASE_LABEL[stats.phase] ?? "Sending" : "Connecting";
     return (
       <>
+        {sender.channel === "light" && controllerRef.current?.display && (
+          <div className="qrcard-wrap">
+            <QrCard transport={controllerRef.current.display} />
+          </div>
+        )}
         <ProgressRing value={value}>
           <div>
             <div className="livenumber">{percent}%</div>

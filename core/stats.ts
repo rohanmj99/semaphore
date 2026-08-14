@@ -15,6 +15,7 @@ export class TransferStats {
   private _totalChunks = 0;
   private _errors = 0;
   private _retries = 0;
+  passes?: number;
   phase: TransferPhase = "connecting";
 
   constructor(totalBytes: number, totalChunks: number) {
@@ -75,6 +76,7 @@ export class TransferStats {
       etaMs: this._totalChunks === 0 ? 0 : etaMs,
       kbps: (rate * 8) / 1000,
       phase: this.phase,
+      passes: this.passes,
     };
   }
 

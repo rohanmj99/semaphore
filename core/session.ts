@@ -145,6 +145,19 @@ interface SenderOpts {
   onEvent?: (e: SessionEvent) => void;
   onHeader?: (header: ManifestHeader) => void;
   chunkSize?: number;
+  /** Broadcast (fire-and-forget) mode: cycle every chunk forever, ignore
+   *  have/done feedback. Used by the sound and light channels, which have
+   *  no reliable return path. The receiving side de-dupes and completes
+   *  on its own; the sender stops only when the user stops it. */
+  noAck?: boolean;
+  /** Broadcast mode only: extra idle gap (ms) between chunks so slow
+   *  transports drain naturally. Defaults to 0 — transports pace
+   *  themselves and `idle()` blocks between passes. */
+  gapMs?: number;
+  /** Broadcast mode only: stop cycling after this many passes (0 = keep
+   *  cycling until the user stops). The sender never gets confirmation in
+   *  broadcast mode, so a bounded cap lets the UI move on. */
+  maxPasses?: number;
 }
 
 export class StreamSender {
@@ -159,6 +172,7 @@ export class StreamSender {
   private timer: ReturnType<typeof setInterval> | null = null;
   private remote: TransportEndpoint | null = null;
   private cancelled = false;
+  private passes = 0;
 
   constructor(
     sessionId: string,
@@ -188,10 +202,15 @@ export class StreamSender {
         const header = await this.builder.buildHeader();
         header.sessionId = this.sessionId;
         this.opts.onHeader?.(header);
-        remote.send(encodeMessage({ t: "hello", sid: this.sessionId, h: toBase64Url(encodeHeaderWire(header, this.sessionKey)) }));
-        this.timer = setInterval(() => this.resendExpired(), 250);
-        await this.pump();
-        if (this.state === "sending") this.done();
+        if (this.opts.noAck) {
+          await this.pumpNoAck();
+          if (this.state === "sending") this.done();
+        } else {
+          remote.send(this.helloFrame(header));
+          this.timer = setInterval(() => this.resendExpired(), 250);
+          await this.pump();
+          if (this.state === "sending") this.done();
+        }
       } catch (e) {
         this.fail(e instanceof Error ? e.message : "send failed");
       } finally {
@@ -199,6 +218,46 @@ export class StreamSender {
         if (this.timer) clearInterval(this.timer);
       }
     })();
+  }
+
+  private helloFrame(header: ManifestHeader): Uint8Array {
+    return encodeMessage({ t: "hello", sid: this.sessionId, h: toBase64Url(encodeHeaderWire(header, this.sessionKey)) });
+  }
+
+  /** Broadcast mode: re-send the header once per pass, then cycle every
+   *  chunk in order. Each send is paced by the transport's `idle()`, so a
+   *  display transport holds every fragment on screen and an audio
+   *  transport drains before the next chunk is queued. */
+  private async pumpNoAck(): Promise<void> {
+    const total = this.builder.meta.totalChunks;
+    const gap = this.opts.gapMs ?? 0;
+    const maxPasses = this.opts.maxPasses ?? 0;
+    while (this.state === "sending") {
+      if (this.remote) {
+        this.emit({ type: "phase", phase: this.passes === 0 ? "running" : "repair" });
+        this.remote.send(this.helloFrame(this.builder.header));
+        await this.waitIdle();
+        for (let i = 0; i < total; i++) {
+          await this.sendChunk(i);
+          await this.waitIdle();
+          if (gap > 0) await sleep(gap);
+        }
+      }
+      this.passes++;
+      this.stats.passes = this.passes;
+      this.stats.phase = "repair";
+      this.emit({ type: "stats", stats: this.stats.snapshot() });
+      if (total === 0 && this.passes >= 2) return;
+      if (maxPasses > 0 && this.passes >= maxPasses) return;
+    }
+  }
+
+  private waitIdle(): Promise<void> {
+    const remote = this.remote;
+    if (!remote) return Promise.resolve();
+    const idle = (remote as { idle?: () => Promise<void> }).idle;
+    // Call with the transport as `this` — unbounded extraction loses it.
+    return idle ? idle.call(remote) : Promise.resolve();
   }
 
   private async pump() {
@@ -225,6 +284,12 @@ export class StreamSender {
       this.remote.send(
         encodeMessage({ t: "chunk", sid: this.sessionId, p: toBase64Url(chunkFrame(index, crc32, ciphertext)) }),
       );
+      if (this.opts.noAck) {
+        // No feedback path in broadcast mode — track sent volume so the UI
+        // can show progress that approaches 100% over the first pass.
+        this.stats.addBytes(ciphertext.length);
+        this.stats.chunkDelivered();
+      }
       this.emit({ type: "chunk", index });
     } catch (e) {
       this.fail(e instanceof Error ? e.message : "chunk prepare failed");
@@ -247,6 +312,7 @@ export class StreamSender {
   }
 
   private handleMessage(m: WireMessage) {
+    if (this.opts.noAck) return;
     if (m.sid !== this.sessionId) return;
     if (m.t === "have" || m.t === "nack") {
       try {
@@ -288,6 +354,10 @@ export class StreamSender {
     this.cancelled = true;
     if (this.state === "sending") this.state = "idle";
     if (this.timer) clearInterval(this.timer);
+  }
+
+  get passCount(): number {
+    return this.passes;
   }
 }
 

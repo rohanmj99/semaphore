@@ -12,6 +12,7 @@
     "icons": "node scripts/gen-icons.mjs"
   },
   "dependencies": {
+    "dijkstrajs": "^1.0.3",
     "fflate": "^0.8.2",
     "jsqr": "^1.4.0",
     "libsodium-wrappers": "^0.7.15",
