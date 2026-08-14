@@ -1,0 +1,56 @@
+﻿}
+                      type="button"
+                      className="sessionbtn card"
+                      onClick={() => void pickSession(s as ScannedSession)}
+                    >
+                      <WordChips pair={s.wordPair} />
+                      <span className="sessiontag">{CHANNEL_TAG[(s as ScannedSession).channel] ?? "nearby"}</span>
+                      <span className="hint">
+                        {s.file ? `${s.file.name} ┬╖ ${fmtBytes(s.file.size)}` : "Spot the session"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="hint" aria-live="polite">
+                  Waiting for a sender to appear. On the other device, choose Send and the same
+                  channel.
+                </p>
+              )}
+              <div className="linkentry">
+                <label htmlFor="link-input" className="visually-hidden">
+                  Paste a Semaphore link
+                </label>
+                <input
+                  id="link-input"
+                  type="text"
+                  placeholder="Or paste an online link"
+                  value={linkInput}
+                  disabled={opening}
+                  onChange={(e) => setLinkInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && sessionIdFromLink(linkInput)) {
+                      void startOnline(sessionIdFromLink(linkInput) as string);
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={opening || !sessionIdFromLink(linkInput)}
+                  onClick={() => {
+                    const id = sessionIdFromLink(linkInput);
+                    if (id) void startOnline(id);
+                  }}
+                >
+                  <IconCopy />
+                  Open link
+                </button>
+              </div>
+            </>
+          )}
+          <div className="spacer" />
+          <button type="button" className="ghost" onClick={backToLanding}>
+            <IconBack />
+            Back
+  

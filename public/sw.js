@@ -1,4 +1,4 @@
-const CACHE = "semaphore-v1";
+const CACHE = "semaphore-v2";
 const PRECACHE = [
   "./",
   "./index.html",
@@ -32,6 +32,20 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+  if (request.mode === "navigate") {
+    // App shell: always try the network so a fresh build is picked up;
+    // fall back to the cached shell when offline.
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE).then((cache) => cache.put(request, copy));
+          return response;
+        })
+        .catch(() => caches.match(request)),
+    );
+    return;
+  }
   event.respondWith(
     caches.match(request).then(
       (cached) =>

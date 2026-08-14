@@ -1,4 +1,4 @@
-import type { MailboxEntry } from "../core/mailbox.ts";
+import type { MailboxEntry } from "../core/mailbox.js";
 
 export interface MailboxStore {
   list(key: string): Promise<MailboxEntry[]>;

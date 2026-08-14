@@ -1,0 +1,49 @@
+﻿tMode = useApp((s) => s.setMode);
+  const controllerRef = useRef<ReceiveController | null>(null);
+  const [unsupported] = useState(() => !pairingSupported());
+  const [linkInput, setLinkInput] = useState("");
+  const [opening, setOpening] = useState(false);
+  const consumedLink = useRef(false);
+  const chosenChannel = useRef<ScannedSession["channel"] | "online" | null>(null);
+
+  useEffect(() => {
+    if (consumedLink.current) return;
+    const hashId = sessionIdFromLink(location.hash);
+    if (!hashId) return;
+    consumedLink.current = true;
+    history.replaceState(null, "", location.pathname + location.search);
+    setReceiver({ screen: "waiting", error: "" });
+    startOnline(hashId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (unsupported) return;
+    const byId = new Map<string, ScannedSession>();
+    const commit = () => {
+      if (useApp.getState().receiver.screen !== "listen") return;
+      setReceiver({
+        sessions: [...byId.values()].sort((a, b) => a.seenAt - b.seenAt),
+      });
+    };
+    const tag = (list: VisibleSession[], channel: ScannedSession["channel"]) => {
+      for (const s of list) {
+        if (!byId.has(s.sessionId)) byId.set(s.sessionId, { ...s, channel });
+      }
+      commit();
+    };
+    const stops: Array<() => void> = [];
+    if (pairingSupported()) stops.push(scanForSessions((l) => tag(l, "loopback")));
+    if (soundRxSupport()) stops.push(() => scanSoundSessions((l) => tag(l, "sound")).stop());
+    if (lightSupported()) stops.push(() => scanLightSessions((l) => tag(l, "light")).stop());
+    return () => {
+      for (const stop of stops) stop();
+      controllerRef.current?.cancel();
+      controllerRef.current = null;
+      chosenChannel.current = null;
+    };
+  }, [unsupported, setReceiver]);
+
+  useEffect(() => {
+    if (receiver.screen !== "transfer") return;
+    return w

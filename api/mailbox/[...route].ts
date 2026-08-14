@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { createStore, resolveMailbox, type MailboxStore } from "../mailbox-store.ts";
+import { createStore, resolveMailbox, type MailboxStore } from "../mailbox-store.js";
 
 let store: MailboxStore | null = null;
 

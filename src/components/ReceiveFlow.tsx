@@ -68,6 +68,7 @@ export function ReceiveFlow() {
   const [opening, setOpening] = useState(false);
   const consumedLink = useRef(false);
   const chosenChannel = useRef<ScannedSession["channel"] | "online" | null>(null);
+  const [scanIssue, setScanIssue] = useState("");
 
   useEffect(() => {
     if (consumedLink.current) return;
@@ -82,6 +83,8 @@ export function ReceiveFlow() {
 
   useEffect(() => {
     if (unsupported) return;
+    if (useApp.getState().receiver.screen !== "listen") return;
+    setScanIssue("");
     const byId = new Map<string, ScannedSession>();
     const commit = () => {
       if (useApp.getState().receiver.screen !== "listen") return;
@@ -95,17 +98,28 @@ export function ReceiveFlow() {
       }
       commit();
     };
+    const note = (msg: string) =>
+      setScanIssue((prev) => (prev.includes(msg) ? prev : `${prev ? `${prev} ` : ""}${msg}`));
     const stops: Array<() => void> = [];
     if (pairingSupported()) stops.push(scanForSessions((l) => tag(l, "loopback")));
-    if (soundRxSupport()) stops.push(() => scanSoundSessions((l) => tag(l, "sound")).stop());
-    if (lightSupported()) stops.push(() => scanLightSessions((l) => tag(l, "light")).stop());
+    if (soundRxSupport()) {
+      stops.push(() =>
+        scanSoundSessions((l) => tag(l, "sound"), note).stop(),
+      );
+    }
+    if (lightSupported()) {
+      stops.push(() =>
+        scanLightSessions((l) => tag(l, "light"), note).stop(),
+      );
+    }
     return () => {
       for (const stop of stops) stop();
-      controllerRef.current?.cancel();
-      controllerRef.current = null;
       chosenChannel.current = null;
     };
-  }, [unsupported, setReceiver]);
+    // Keyed by screen so the camera + mic are only active while the user is
+    // actually on the listen screen (they are released as soon as a session
+    // is picked and the matcher's own channel camera/mic take over).
+  }, [unsupported, setReceiver, receiver.screen]);
 
   useEffect(() => {
     if (receiver.screen !== "transfer") return;
@@ -245,10 +259,16 @@ export function ReceiveFlow() {
                 </div>
               ) : (
                 <p className="hint" aria-live="polite">
-                  Waiting for a sender to appear. On the other device, choose Send and the same
-                  channel.
+                  Waiting for a sender. This device is listening with your camera (screen-flash
+                  QR), your microphone (sound tones), and nearby open tabs. On the other device
+                  choose Send and pick the same channel.
                 </p>
               )}
+              {scanIssue ? (
+                <p className="hint warn" role="alert">
+                  {scanIssue}
+                </p>
+              ) : null}
               <div className="linkentry">
                 <label htmlFor="link-input" className="visually-hidden">
                   Paste a Semaphore link
