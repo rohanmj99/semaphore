@@ -20,7 +20,7 @@ export function mailboxClient(): Mailbox {
   return createHttpMailbox(API_BASE);
 }
 
-export const mailboxForSession: MailboxForSession = (sessionId) => createHttpMailbox(`${API_BASE}/${sessionId}`);
+export const mailboxForSession: MailboxForSession = (sessionId) => createHttpMailbox(API_BASE, undefined, undefined, [sessionId]);
 
 export function shareLinkFor(sessionId: string): string {
   return `${location.origin}${location.pathname}#${sessionId}`;

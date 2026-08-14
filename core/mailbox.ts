@@ -33,7 +33,20 @@ export interface FetchLike {
   }>;
 }
 
-export function createHttpMailbox(apiBase: string, fetchImpl: FetchLike = globalThis.fetch.bind(globalThis), timeoutMs = 5000): Mailbox {
+export function createHttpMailbox(
+  apiBase: string,
+  fetchImpl: FetchLike = globalThis.fetch.bind(globalThis),
+  timeoutMs = 5000,
+  routePrefix: string[] = [],
+): Mailbox {
+  // Route segments travel in the query string: the deployed function lives at
+  // the exact path /api/mailbox (catch-all routes compile to single segments
+  // on this project), and vercel.json additionally rewrites /api/mailbox/<...>
+  // onto the same ?path=<...> query. A session-scoped mailbox prefixes every
+  // request with ?route=<sessionId>.
+  const baseQuery = routePrefix.length > 0 ? `${apiBase}?route=${routePrefix.map(encodeURIComponent).join("&route=")}` : apiBase;
+  const routeUrl = (kind: string, tail: string) =>
+    `${baseQuery}${baseQuery.includes("?") ? "&" : "?"}route=${encodeURIComponent(kind)}${tail}`;
   async function request(
     url: string,
     init: { method?: string; headers?: Record<string, string>; body?: string },
@@ -56,11 +69,7 @@ export function createHttpMailbox(apiBase: string, fetchImpl: FetchLike = global
 
   return {
     async put(kind, payload) {
-      // Route segments travel in the query string: the deployed function
-      // lives at the exact path /api/mailbox (catch-all routes compile to
-      // single segments on this project), and vercel.json additionally
-      // rewrites /api/mailbox/<...> onto the same ?path=<...> query.
-      const url = `${apiBase}?route=${encodeURIComponent(kind)}`;
+      const url = routeUrl(kind, "");
       const res = await request(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -75,7 +84,7 @@ export function createHttpMailbox(apiBase: string, fetchImpl: FetchLike = global
     },
     async get(kind, since = 0) {
       const tail = since > 0 ? `&since=${since}` : "";
-      const res = await request(`${apiBase}?route=${encodeURIComponent(kind)}${tail}`, { method: "GET" });
+      const res = await request(routeUrl(kind, tail), { method: "GET" });
       if (!res.ok) {
         if (res.status === 404) return { entries: [], now: 0, ttlSeconds: null };
         throw new MailboxHttpError(res.status, `mailbox read failed (${res.status})`);

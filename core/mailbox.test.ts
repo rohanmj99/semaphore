@@ -42,10 +42,22 @@ describe("createHttpMailbox", () => {
     expect(page.now).toBe(4);
   });
 
-  it("treats 404 as an empty page", async () => {
+it("treats 404 as an empty page", async () => {
     const mailbox = createHttpMailbox("/api/mailbox", fakeFetch(new Map()));
     const page = await mailbox.get("announce");
     expect(page.entries).toEqual([]);
+  });
+
+  it("prefixes session-scoped requests with the session route", async () => {
+    const routes = new Map<string, unknown>([
+      ["POST /api/mailbox?route=0123456789abcdef&route=go", { i: 3 }],
+      ["GET /api/mailbox?route=0123456789abcdef&route=ice&since=2", { entries: [], now: 3, ttlSeconds: 590 }],
+    ]);
+    const mailbox = createHttpMailbox("/api/mailbox", fakeFetch(routes), 5000, ["0123456789abcdef"]);
+    await expect(mailbox.put("go", "x")).resolves.toBe(3);
+    const page = await mailbox.get("ice", 2);
+    expect(page.entries).toEqual([]);
+    expect(page.now).toBe(3);
   });
 
   it("surfaces write errors", async () => {
