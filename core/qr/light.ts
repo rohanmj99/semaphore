@@ -279,9 +279,14 @@ export function startCameraDecoder(
       video.autoplay = true;
       canvas = document.createElement("canvas");
       if (preview) preview.replaceChildren(video);
-      void video.play().then(() => {
-        raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame(tick) : 0;
-      });
+      void video
+        .play()
+        .then(() => {
+          raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame(tick) : 0;
+        })
+        .catch(() => {
+          /* play() interrupted by an early stop() — nothing to do */
+        });
     })
     .catch(() => {
       if (!stopped && !errSent) {
@@ -481,7 +486,6 @@ export function advertiseLight(
   const fp = fingerprint(kp.publicKey);
   const display = new LightTransport({ tx: true, rx: false });
   const camera = new LightTransport({ tx: false, rx: true, camera: true });
-  const parser = new FrameParser();
 
   const announcement: SessionAnnouncement = {
     sessionId,
@@ -509,25 +513,23 @@ export function advertiseLight(
   }
 
   const unsub = camera.onMessage((frame) => {
-    for (const f of parser.push(frame)) {
-      let m: { t?: string; sid?: string; pub?: string; fp?: string };
+    let m: { t?: string; sid?: string; pub?: string; fp?: string };
+    try {
+      m = JSON.parse(new TextDecoder().decode(frame)) as typeof m;
+    } catch {
+      return;
+    }
+    if (!matched && m.t === "match" && m.sid === sessionId && typeof m.pub === "string" && typeof m.fp === "string") {
+      matched = true;
       try {
-        m = JSON.parse(new TextDecoder().decode(f)) as typeof m;
+        matchedPub = fromBase64Url(m.pub);
       } catch {
-        continue;
+        matchedPub = null;
       }
-      if (!matched && m.t === "match" && m.sid === sessionId && typeof m.pub === "string" && typeof m.fp === "string") {
-        matched = true;
-        try {
-          matchedPub = fromBase64Url(m.pub);
-        } catch {
-          matchedPub = null;
-        }
-        matchedFp = m.fp;
-        if (timer) clearInterval(timer);
-        timer = null;
-        for (const cb of [...matchHandlers]) cb({ receiverFingerprint: m.fp, receiverPub: m.pub });
-      }
+      matchedFp = m.fp;
+      if (timer) clearInterval(timer);
+      timer = null;
+      for (const cb of [...matchHandlers]) cb({ receiverFingerprint: m.fp, receiverPub: m.pub });
     }
   });
 
@@ -604,7 +606,6 @@ export function matchLightSession(
   const kp = keypair();
   const receiverFp = fingerprint(kp.publicKey);
   const channel = new LightTransport({ tx: true, rx: true, camera: true });
-  const parser = new FrameParser();
   const goHandlers = new Set<() => void>();
   const failureHandlers = new Set<(message: string) => void>();
   let pin: { sessionId: string; sessionKey: Uint8Array; channel: TransportEndpoint } | null = null;
@@ -613,19 +614,17 @@ export function matchLightSession(
   let burstTimer: ReturnType<typeof setTimeout> | null = null;
 
   const unsub = channel.onMessage((frame) => {
-    for (const f of parser.push(frame)) {
-      let m: { t?: string; sid?: string };
-      try {
-        m = JSON.parse(new TextDecoder().decode(f)) as typeof m;
-      } catch {
-        continue;
-      }
-      if ((m.t === "go" || m.t === "hello") && m.sid === session.sessionId && !goDone) {
-        // "go" is explicit; "hello" is the sender's first transfer frame and
-        // doubles as a fallback if the go burst was missed by the camera.
-        goDone = true;
-        for (const cb of [...goHandlers]) cb();
-      }
+    let m: { t?: string; sid?: string };
+    try {
+      m = JSON.parse(new TextDecoder().decode(frame)) as typeof m;
+    } catch {
+      return;
+    }
+    if ((m.t === "go" || m.t === "hello") && m.sid === session.sessionId && !goDone) {
+      // "go" is explicit; "hello" is the sender's first transfer frame and
+      // doubles as a fallback if the go burst was missed by the camera.
+      goDone = true;
+      for (const cb of [...goHandlers]) cb();
     }
   });
 
@@ -701,35 +700,32 @@ export function scanLightSessions(
   opts: { preview?: HTMLElement } = {},
 ): LightScanHandle {
   const camera = new LightTransport({ tx: false, rx: true, camera: true, preview: opts.preview });
-  const parser = new FrameParser();
   const map = new Map<string, VisibleSession>();
   let stopped = false;
 
   const unsub = camera.onMessage((frame) => {
     if (stopped) return;
-    for (const f of parser.push(frame)) {
-      let d: Partial<SessionAnnouncement>;
-      try {
-        d = JSON.parse(new TextDecoder().decode(f)) as Partial<SessionAnnouncement>;
-      } catch {
-        continue;
-      }
-      if (typeof d.sessionId !== "string" || typeof d.wordPair !== "string" || typeof d.senderPub !== "string") continue;
-      try {
-        fromBase64Url(d.senderPub);
-      } catch {
-        continue;
-      }
-      map.set(d.sessionId, {
-        sessionId: d.sessionId,
-        wordPair: d.wordPair,
-        senderFingerprint: typeof d.senderFingerprint === "string" ? d.senderFingerprint : "",
-        senderPub: d.senderPub,
-        file: d.file && typeof d.file.name === "string" ? { name: d.file.name, size: Number(d.file.size) || 0 } : null,
-        seenAt: Date.now(),
-      });
-      onSessions([...map.values()].sort((a, b) => a.seenAt - b.seenAt));
+    let d: Partial<SessionAnnouncement>;
+    try {
+      d = JSON.parse(new TextDecoder().decode(frame)) as Partial<SessionAnnouncement>;
+    } catch {
+      return;
     }
+    if (typeof d.sessionId !== "string" || typeof d.wordPair !== "string" || typeof d.senderPub !== "string") return;
+    try {
+      fromBase64Url(d.senderPub);
+    } catch {
+      return;
+    }
+    map.set(d.sessionId, {
+      sessionId: d.sessionId,
+      wordPair: d.wordPair,
+      senderFingerprint: typeof d.senderFingerprint === "string" ? d.senderFingerprint : "",
+      senderPub: d.senderPub,
+      file: d.file && typeof d.file.name === "string" ? { name: d.file.name, size: Number(d.file.size) || 0 } : null,
+      seenAt: Date.now(),
+    });
+    onSessions([...map.values()].sort((a, b) => a.seenAt - b.seenAt));
   });
 
   if (!canGetVideo()) {
