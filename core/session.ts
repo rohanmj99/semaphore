@@ -41,11 +41,25 @@ class MessageSink {
 
   attach(): this {
     this.unsub = this.endpoint.onMessage((frame) => {
-      for (const f of this.parser.push(frame)) {
+      // Stream transports (loopback/WebRTC) deliver raw bytes that may arrive
+      // in pieces; QR/sound transports already unwrap complete frames. Try
+      // the frame directly first — raw length-prefixed bytes never start with
+      // valid JSON (their first byte is 0x00 for any frame under 16 MB).
+      const parsed: WireMessage[] = [];
+      try {
+        parsed.push(parseMessage(frame));
+      } catch {
         try {
-          this.onMessage(parseMessage(f));
+          for (const f of this.parser.push(frame)) parsed.push(parseMessage(f));
         } catch {
-          /* non-JSON frame ignored */
+          this.parser.reset();
+        }
+      }
+      for (const m of parsed) {
+        try {
+          this.onMessage(m);
+        } catch {
+          /* consumer errors are isolated */
         }
       }
     });
@@ -227,20 +241,28 @@ export class StreamSender {
   /** Broadcast mode: re-send the header once per pass, then cycle every
    *  chunk in order. Each send is paced by the transport's `idle()`, so a
    *  display transport holds every fragment on screen and an audio
-   *  transport drains before the next chunk is queued. */
+   *  transport drains before the next chunk is queued. The header is also
+   *  re-sent every few chunks so receivers that start scanning mid-transfer
+   *  can still sync within the receiver's header timeout. */
   private async pumpNoAck(): Promise<void> {
     const total = this.builder.meta.totalChunks;
     const gap = this.opts.gapMs ?? 0;
     const maxPasses = this.opts.maxPasses ?? 0;
+    const helloEvery = 4;
     while (this.state === "sending") {
       if (this.remote) {
-        this.emit({ type: "phase", phase: this.passes === 0 ? "running" : "repair" });
+        this.stats.phase = this.passes === 0 ? "running" : "repair";
+        this.emit({ type: "phase", phase: this.stats.phase });
         this.remote.send(this.helloFrame(this.builder.header));
         await this.waitIdle();
         for (let i = 0; i < total; i++) {
           await this.sendChunk(i);
           await this.waitIdle();
           if (gap > 0) await sleep(gap);
+          if (i + 1 < total && (i + 1) % helloEvery === 0) {
+            this.remote.send(this.helloFrame(this.builder.header));
+            await this.waitIdle();
+          }
         }
       }
       this.passes++;
@@ -378,6 +400,9 @@ export class StreamReceiver {
     new MessageSink(remote, (m) => {
       if (m.sid !== this.engine.sessionId) return;
       if (m.t === "hello") {
+        // Broadcast senders re-announce the header periodically so receivers
+        // that start scanning mid-transfer can still sync — ignore repeats.
+        if (this.engine.header !== null) return;
         const res = this.engine.acceptHeader(bytesOf(m, "h"));
         if (res === "ok") {
           this.onEvent?.({ type: "phase", phase: "running" });

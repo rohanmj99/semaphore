@@ -311,7 +311,13 @@ export function SendFlow() {
             className="primary big"
             onClick={() => {
               controllerRef.current?.confirmMatch();
-              setSender({ screen: "waiting" });
+              // For broadcast channels the stream starts synchronously, so the
+              // transfer screen (with its animated QR) is already live; the
+              // `waiting` screen is only a placeholder while a network peer
+              // finishes connecting.
+              setSender({
+                screen: sender.channel === "light" || sender.channel === "sound" ? "transfer" : "waiting",
+              });
             }}
           >
             <IconCheck />

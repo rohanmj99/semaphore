@@ -548,9 +548,9 @@ export function advertiseLight(
     onMatch(cb) {
       matchHandlers.add(cb);
     },
-    notifyGo() {
-      if (stopped || matchedPub === null) return;
-      if (timer) clearInterval(timer);
+notifyGo() {
+    if (stopped || matchedPub === null) return;
+    if (timer) clearInterval(timer);
       timer = null;
       const goFrame = frameMessage(new TextEncoder().encode(JSON.stringify({ t: "go", sid: sessionId })));
       let plays = 0;

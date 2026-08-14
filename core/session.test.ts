@@ -169,7 +169,11 @@ it("broadcasts in noAck mode: cycles every chunk per pass, receiver completes on
     expect(sender.passCount).toBe(3);
     expect(captured.lastStats?.passes).toBe(3);
 
-    const perPass = 1 + Math.ceil(data.length / 64);
+    const totalChunks = Math.ceil(data.length / 64);
+    // Every pass opens with the header frame, then chunks in order, with the
+    // header re-sent every 4 chunks so mid-transfer receivers can sync.
+    const hellosPerPass = 1 + Math.floor((totalChunks - 1) / 4);
+    const perPass = hellosPerPass + totalChunks;
     const parser = new FrameParser();
     const wire: Uint8Array[] = [];
     for (const f of recorder.frames) wire.push(...parser.push(f));
@@ -184,18 +188,26 @@ it("broadcasts in noAck mode: cycles every chunk per pass, receiver completes on
     // Receiver echoes have/done back onto the shared transport — ignore them.
     expect(senderFrames.length).toBe(3 * perPass);
 
-    // Every pass opens with the header frame, then chunks in order.
+    // Every pass opens with the header frame, then chunks in order with the
+    // periodic header re-sends interspersed after every 4th chunk.
     for (let pass = 0; pass < 3; pass++) {
       const off = pass * perPass;
       const hello = parseMessage(senderFrames[off]);
       expect(hello.t).toBe("hello");
       expect(hello.sid).toBe(sessionId);
+      let chunkIndex = 0;
       for (let c = 0; c < perPass - 1; c++) {
         const m = parseMessage(senderFrames[off + 1 + c]);
+        if (m.t === "hello") {
+          expect(chunkIndex % 4).toBe(0);
+          continue;
+        }
         expect(m.t).toBe("chunk");
         const p = fromBase64Url(m.p as string);
-        expect(new DataView(p.buffer).getUint32(0, false)).toBe(c);
+        expect(new DataView(p.buffer).getUint32(0, false)).toBe(chunkIndex);
+        chunkIndex++;
       }
+      expect(chunkIndex).toBe(totalChunks);
     }
 
 // The receiver decodes the whole file from pass 1 alone.
