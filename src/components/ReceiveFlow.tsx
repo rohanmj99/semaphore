@@ -63,6 +63,7 @@ export function ReceiveFlow() {
   const resetReceiver = useApp((s) => s.resetReceiver);
   const setMode = useApp((s) => s.setMode);
   const controllerRef = useRef<ReceiveController | null>(null);
+  const camPreviewRef = useRef<HTMLDivElement | null>(null);
   const [linkInput, setLinkInput] = useState("");
   const [opening, setOpening] = useState(false);
   const consumedLink = useRef(false);
@@ -149,14 +150,19 @@ export function ReceiveFlow() {
     const stops: Array<() => void> = [];
     if (nearbyOn && pairingSupported()) stops.push(scanForSessions((l) => tag(l, "loopback")));
     if (micOn && soundRxSupport()) {
-      stops.push(() =>
-        scanSoundSessions((l) => tag(l, "sound"), note).stop(),
-      );
+      const scan = scanSoundSessions((l) => tag(l, "sound"), note);
+      stops.push(() => scan.stop());
     }
     if (camOn && lightSupported()) {
-      stops.push(() =>
-        scanLightSessions((l) => tag(l, "light"), note).stop(),
+      const scan = scanLightSessions(
+        (l) => tag(l, "light"),
+        note,
+        camPreviewRef.current ? { preview: camPreviewRef.current } : undefined,
       );
+      stops.push(() => {
+        scan.stop();
+        if (camPreviewRef.current) camPreviewRef.current.replaceChildren();
+      });
     }
     return () => {
       for (const stop of stops) stop();
@@ -321,6 +327,9 @@ export function ReceiveFlow() {
               </span>
             </button>
           </div>
+          {camOn && lightSupported() && (
+            <div className="campreview" ref={camPreviewRef} aria-hidden="true" />
+          )}
           {scanIssue ? (
             <p className="hint warn" role="alert">
               {scanIssue}

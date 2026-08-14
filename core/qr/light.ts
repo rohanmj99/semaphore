@@ -207,10 +207,11 @@ export function lightSupported(): boolean {
  */
 export function startCameraDecoder(
   onDecode: (payload: Uint8Array) => void,
-  opts: { onError?: (message: string) => void } = {},
+  opts: { onError?: (message: string) => void; preview?: HTMLElement } = {},
 ): CameraHandle {
   const W = 640;
   const H = 480;
+  const preview = opts.preview ?? null;
   let stream: MediaStream | null = null;
   let video: HTMLVideoElement | null = null;
   let canvas: HTMLCanvasElement | null = null;
@@ -274,7 +275,10 @@ export function startCameraDecoder(
       video = document.createElement("video");
       video.srcObject = s;
       video.setAttribute("playsinline", "");
+      video.muted = true;
+      video.autoplay = true;
       canvas = document.createElement("canvas");
+      if (preview) preview.replaceChildren(video);
       void video.play().then(() => {
         raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame(tick) : 0;
       });
@@ -293,6 +297,11 @@ export function startCameraDecoder(
       raf = 0;
       stream?.getTracks().forEach((t) => t.stop());
       stream = null;
+      if (video) {
+        video.pause?.();
+        video.srcObject = null;
+        video.remove();
+      }
       video = null;
       canvas = null;
     },
@@ -307,6 +316,7 @@ export interface LightTransportOptions {
   tx?: boolean;
   rx?: boolean;
   camera?: boolean;
+  preview?: HTMLElement;
 }
 
 /**
@@ -334,7 +344,7 @@ export class LightTransport implements TransportEndpoint {
   constructor(opts: LightTransportOptions = {}) {
     this.txOn = opts.tx !== false;
     if (opts.camera) {
-      this.cam = startCameraDecoder((payload) => this.onQrPayload(payload));
+      this.cam = startCameraDecoder((payload) => this.onQrPayload(payload), { preview: opts.preview });
     }
   }
 
@@ -688,8 +698,9 @@ export interface LightScanHandle {
 export function scanLightSessions(
   onSessions: (list: VisibleSession[]) => void,
   onError?: (message: string) => void,
+  opts: { preview?: HTMLElement } = {},
 ): LightScanHandle {
-  const camera = new LightTransport({ tx: false, rx: true, camera: true });
+  const camera = new LightTransport({ tx: false, rx: true, camera: true, preview: opts.preview });
   const parser = new FrameParser();
   const map = new Map<string, VisibleSession>();
   let stopped = false;
