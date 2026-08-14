@@ -1,11 +1,16 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import type { MailboxEntry } from "../../core/mailbox.ts";
+import type { MailboxEntry } from "../core/mailbox.ts";
 
 // Self-contained mailbox function. Vercel deploys each api file compiled on
 // its own, so this entry must not import any sibling .ts module at runtime —
 // only type imports (stripped at compile) are allowed. The store logic below
-// is kept in sync with api/mailbox-store.ts, which the tests and the dev
+// is kept in sync with core/mailbox-store.ts, which the tests and the dev
 // server (scripts/dev-mailbox.ts) import directly.
+//
+// The handler lives at the top-level catch-all (api/[...route].ts) and strips
+// the "mailbox" prefix itself: nested catch-all files (api/mailbox/[...route].ts)
+// deployed as single-segment routes on Vercel, so the mailbox URLs were never
+// reachable as designed.
 
 interface MailboxStore {
   list(key: string): Promise<MailboxEntry[]>;
@@ -214,6 +219,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   corsHeaders(res);
   const routeRaw = req.query.route;
   const route = (Array.isArray(routeRaw) ? routeRaw : routeRaw ? [routeRaw] : []).map((r) => decodeURIComponent(r));
+  if (route[0] !== "mailbox") {
+    res.status(404);
+    res.json({ error: "not found" });
+    return;
+  }
+  const mailboxRoute = route.slice(1);
   const sinceRaw = typeof req.query.since === "string" ? Number(req.query.since) : null;
   const since = sinceRaw !== null && Number.isFinite(sinceRaw) ? sinceRaw : null;
 
@@ -234,7 +245,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const resp = await resolveMailbox(getStore(), {
-    route,
+    route: mailboxRoute,
     method: req.method ?? "GET",
     since,
     payload,
