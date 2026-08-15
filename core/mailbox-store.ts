@@ -116,7 +116,8 @@ async function kvFetch(baseUrl: string, token: string, args: unknown[]): Promise
   if (!res.ok) {
     throw new Error(`KV request failed (${res.status})`);
   }
-  return res.json();
+  const body = (await res.json()) as { result?: unknown };
+  return "result" in body ? body.result : body;
 }
 
 export const MAILBOX_KINDS = ["announce", "peer", "go", "ready", "offer", "answer", "ice"] as const;

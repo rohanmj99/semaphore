@@ -146,12 +146,13 @@ describe("kvFromEnv", () => {
     (globalThis as { fetch: unknown }).fetch = (url: string | URL | Request, init?: { headers?: Record<string, string> }) => {
       seen.push(String(url));
       seenAuth.push(init?.headers?.authorization);
-      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response);
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ result: ["member-1"] }) } as Response);
     };
     try {
       const kv = kvFromEnv();
       expect(kv).not.toBeNull();
-      await kv!.zrange("mailbox:abc:go", 0, -1);
+      const members = await kv!.zrange("mailbox:abc:go", 0, -1);
+      expect(members).toEqual(["member-1"]);
       await kv!.zadd("mailbox:abc:go", 1, '{"i":1,"p":"hi"}');
       await kv!.expire("mailbox:abc:go", 600);
       await kv!.ttl("mailbox:abc:go");
