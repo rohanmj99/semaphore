@@ -199,7 +199,27 @@ async function resolveMailbox(store: MailboxStore, req: MailboxRequest, ttlSecon
 
 function createStore(): MailboxStore {
   const kv = kvFromEnv();
-  return kv ? new KvMailboxStore(kv) : new MemoryMailboxStore();
+  if (!kv) return new MemoryMailboxStore();
+  const kvStore = new KvMailboxStore(kv);
+  const memory = new MemoryMailboxStore();
+  let warned = false;
+  const via = async <R>(use: () => Promise<R>, alt: () => Promise<R>): Promise<R> => {
+    try {
+      return await use();
+    } catch (err) {
+      if (!warned) {
+        warned = true;
+        console.error(`[mailbox] KV store failed (${err instanceof Error ? err.message : String(err)}); falling back to per-instance memory`);
+      }
+      return alt();
+    }
+  };
+  return {
+    list: (key) => via(() => kvStore.list(key), () => memory.list(key)),
+    append: (key, payload, ttlSeconds) =>
+      via(() => kvStore.append(key, payload, ttlSeconds), () => memory.append(key, payload, ttlSeconds)),
+    ttlOf: (key) => via(() => kvStore.ttlOf(key), () => memory.ttlOf(key)),
+  };
 }
 
 let store: MailboxStore | null = null;
