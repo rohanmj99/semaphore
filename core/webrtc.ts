@@ -335,7 +335,7 @@ export class WebRtcNegotiator {
       for (const entry of page.entries) {
         const msg = parseMailboxJson<IcePayload>(entry.p);
         if (!msg || typeof msg.from !== "string") continue;
-        if (msg.from === (this.opts.role === "initiator" ? "s" : "r")) continue;
+        if (msg.from === (this.opts.role === "initiator" ? "r" : "s")) continue;
         if (!msg.candidate) continue;
         this.lastIceSeen = Date.now();
         if (this.remoteDescSet) {

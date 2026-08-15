@@ -89,9 +89,11 @@ class FakePeerConnection {
   private b: FakeDataChannel | null = null;
   private offerSeq = 0;
 
+  constructor(private readonly tag: string) {}
+
   static makePair(): [FakePeerConnection, FakePeerConnection] {
-    const a = new FakePeerConnection();
-    const b = new FakePeerConnection();
+    const a = new FakePeerConnection("pcA");
+    const b = new FakePeerConnection("pcB");
     a.peer = b;
     b.peer = a;
     return [a, b];
@@ -116,8 +118,8 @@ class FakePeerConnection {
     this.localDescription = desc;
     queueMicrotask(() => {
       if (this.onicecandidate) {
-        this.onicecandidate({ candidate: new FakeIceCandidate("host-cand", 0) });
-        this.onicecandidate({ candidate: new FakeIceCandidate("srflx-cand", 0) });
+        this.onicecandidate({ candidate: new FakeIceCandidate(`${this.tag}-host-cand`, 0) });
+        this.onicecandidate({ candidate: new FakeIceCandidate(`${this.tag}-srflx-cand`, 0) });
         this.onicecandidate({ candidate: null });
       }
     });
@@ -330,8 +332,12 @@ describe("online pairing and transfer", () => {
 
     expect(receiverStates).toContain("open");
     expect(senderStates).toContain("open");
-    expect(pcB.iceReceived.length).toBeGreaterThan(0);
-    expect(pcA.iceReceived.length).toBeGreaterThan(0);
+    const receivedOnA = pcA.iceReceived.map((c) => (c.candidate ?? "").split("-")[0]);
+    const receivedOnB = pcB.iceReceived.map((c) => (c.candidate ?? "").split("-")[0]);
+    expect(receivedOnB).toContain("pcA");
+    expect(receivedOnA).toContain("pcB");
+    expect(receivedOnA).not.toContain("pcA");
+    expect(receivedOnB).not.toContain("pcB");
 
     sender.stop();
     receiver.cancel();
