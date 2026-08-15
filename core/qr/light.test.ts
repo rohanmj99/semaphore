@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { frameMessage } from "../frames.ts";
 import {
   LIGHT_FRAG_CAP,
@@ -7,6 +7,7 @@ import {
   LIGHT_FRAG_SIZE,
   QrReassembler,
   LightTransport,
+  startCameraDecoder,
   fragmentLight,
   paintQr,
   renderQr,
@@ -166,5 +167,147 @@ describe("light transport", () => {
     for (let i = 0; i < 5; i++) rx.feedImage(noise, 64, 64);
     expect(delivered).toEqual([]);
     rx.close();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Camera preview lifecycle: a matcher's camera starts before any       */
+/* preview box exists, and the receiver's preview box is recreated     */
+/* between screens (React unmounts the old one). The video element     */
+/* must stay connected to the document and re-play when re-attached,   */
+/* otherwise the camera freezes black after the screen changes.        */
+/* ------------------------------------------------------------------ */
+describe("camera preview lifecycle", () => {
+  interface FakeVideo extends Record<string, unknown> {
+    paused: boolean;
+    playCalls: number;
+    play(): Promise<void>;
+    pause(): void;
+    remove(): void;
+    replaceChildren(): void;
+    setAttribute(): void;
+  }
+
+  let origDocument: unknown;
+  let origNavigator: unknown;
+  let streamObj: { getTracks: () => Array<{ stop(): void }> };
+  let videos: FakeVideo[] = [];
+  let bodyEl: FakeEl;
+
+  interface FakeEl {
+    tagName: string;
+    style: Record<string, string>;
+    children: unknown[];
+    parentNode: FakeEl | null;
+    appendChild(c: unknown): unknown;
+    replaceChildren(...cs: unknown[]): void;
+    remove(): void;
+    setAttribute(k: string, v?: string): void;
+    removeAttribute(k: string): void;
+  }
+
+  const fakeEl = (tag: string): FakeEl => {
+    const children: unknown[] = [];
+    const el: FakeEl = {
+      tagName: tag,
+      style: {},
+      children,
+      parentNode: null,
+      appendChild(c: unknown) {
+        (c as { parentNode: unknown }).parentNode = el;
+        children.push(c);
+        return c;
+      },
+      replaceChildren(...cs: unknown[]) {
+        children.length = 0;
+        for (const c of cs) {
+          (c as { parentNode: unknown }).parentNode = el;
+          children.push(c);
+        }
+      },
+      remove() {
+        if (el.parentNode) {
+          const i = el.parentNode.children.indexOf(el);
+          if (i >= 0) el.parentNode.children.splice(i, 1);
+          el.parentNode = null;
+        }
+      },
+      setAttribute() {},
+      removeAttribute() {},
+    };
+    if (tag === "video") {
+      const v = el as unknown as FakeVideo;
+      v.paused = true;
+      v.playCalls = 0;
+      v.play = async () => {
+        v.playCalls++;
+        v.paused = false;
+      };
+      v.pause = () => {
+        v.paused = true;
+      };
+      videos.push(v);
+    }
+    return el;
+  };
+
+  beforeEach(() => {
+    videos = [];
+    origDocument = (globalThis as Record<string, unknown>).document;
+    streamObj = { getTracks: () => [{ stop() {} }] };
+    bodyEl = fakeEl("body");
+    (globalThis as Record<string, unknown>).document = {
+      body: bodyEl,
+      createElement: (tag: string) => fakeEl(tag),
+    };
+    Object.defineProperty(globalThis, "navigator", {
+      value: { mediaDevices: { getUserMedia: async () => streamObj } },
+      configurable: true,
+    });
+  });
+
+  afterEach(() => {
+    (globalThis as Record<string, unknown>).document = origDocument;
+    delete (globalThis as Record<string, unknown>).navigator;
+    void origNavigator;
+  });
+
+  it("parks a preview-less camera in a hidden host so play() works from the start", async () => {
+    const cam = startCameraDecoder(() => {});
+    await new Promise((r) => setTimeout(r, 0));
+    expect(videos.length).toBe(1);
+    const video = videos[0];
+    expect(video).toBeDefined();
+    expect(video.playCalls).toBe(1);
+    expect(video.paused).toBe(false);
+    // Still connected to the document (hidden host), never detached.
+    expect((video.parentNode as { tagName: string }).tagName).toBe("div");
+    expect(bodyEl.children).toContain(video.parentNode);
+    cam.stop();
+  });
+
+  it("resumes the camera when the preview is re-created between screens", async () => {
+    const cam = startCameraDecoder(() => {});
+    await new Promise((r) => setTimeout(r, 0));
+    const video = videos[0];
+
+    const waiting = fakeEl("div");
+    cam.attachPreview(waiting as unknown as HTMLElement);
+    expect((video.parentNode as { tagName: string }).tagName).toBe("div");
+    expect(video.playCalls).toBe(1); // already playing — no extra play()
+
+    // The waiting screen unmounts: the preview div (and the video inside it)
+    // leaves the DOM. Browsers pause the video when it is detached.
+    waiting.remove();
+    video.paused = true;
+
+    const transfer = fakeEl("div");
+    cam.attachPreview(transfer as unknown as HTMLElement);
+    // The fix re-issues play() on re-attach so the camera isn't black.
+    expect(video.playCalls).toBeGreaterThanOrEqual(2);
+    expect(video.paused).toBe(false);
+    expect((video.parentNode as { tagName: string }).tagName).toBe("div");
+    expect(transfer.children).toContain(video);
+    cam.stop();
   });
 });

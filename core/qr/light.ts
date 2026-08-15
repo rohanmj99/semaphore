@@ -313,6 +313,7 @@ export function startCameraDecoder(
   let stream: MediaStream | null = null;
   let video: HTMLVideoElement | null = null;
   let canvas: HTMLCanvasElement | null = null;
+  let host: HTMLDivElement | null = null;
   let raf = 0;
   let frame = 0;
   let scanned = 0;
@@ -379,6 +380,10 @@ export function startCameraDecoder(
     }
     video = null;
     canvas = null;
+    if (host) {
+      host.remove();
+      host = null;
+    }
   };
 
   const attachStream = (s: MediaStream): boolean => {
@@ -393,7 +398,29 @@ export function startCameraDecoder(
     video.muted = true;
     video.autoplay = true;
     canvas = document.createElement("canvas");
-    if (preview) preview.replaceChildren(video);
+    // Keep the video connected to the document from the moment it is created.
+    // Some matchers start the camera before any preview box is rendered, and
+    // the receiver's preview box is recreated between screens (React unmounts
+    // the old one). A video that is detached from the DOM when play() is
+    // called — or that gets detached by a re-render — pauses and goes black
+    // on several browsers, so the element is parked in a hidden host until a
+    // preview container claims it, and play() is re-issued on every attach.
+    if (preview) {
+      preview.replaceChildren(video);
+    } else if (document.body) {
+      if (!host) {
+        host = document.createElement("div");
+        host.style.position = "fixed";
+        host.style.left = "-100000px";
+        host.style.top = "0";
+        host.style.width = "1px";
+        host.style.height = "1px";
+        host.style.overflow = "hidden";
+        host.setAttribute("aria-hidden", "true");
+        document.body.appendChild(host);
+      }
+      host.replaceChildren(video);
+    }
     void video
       .play()
       .then(() => {
@@ -450,7 +477,14 @@ export function startCameraDecoder(
     },
     attachPreview(el: HTMLElement) {
       preview = el;
-      if (video && el) el.replaceChildren(video);
+      if (video && el) {
+        el.replaceChildren(video);
+        // The receiver's preview box is recreated between screens (React
+        // unmounts the previous one), which detaches the video from the DOM
+        // and pauses it on some browsers. Re-issue play() so the camera
+        // doesn't stay frozen/black after re-attaching.
+        if (video.paused) void video.play().catch(() => {});
+      }
     },
     lastDecodeMs: () => lastDecode,
   };

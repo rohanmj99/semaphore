@@ -5,7 +5,21 @@ Update this file at the end of every working session. Dates below are session da
 
 ---
 
-## Latest state — 2026-08-15 — FOUNTAIN-CODED QR TRANSFER (LT codes, ~1 KB symbols, frame-rate slider; commit TBD)
+## Latest state — 2026-08-15 — RECEIVER CAMERA BLACK AFTER PAIRING FIXED (video detached on screen change went dark; commit TBD)
+
+### 2026-08-15 — camera freezes black after pairing (user report) — root-caused and fixed
+- **Symptom**: on the light (screen-flash) channel, the receiver's camera box works on the listen screen but goes **black after pairing** — after confirming the words (waiting screen) and/or when the transfer starts (transfer screen).
+- **Root cause**: two camera-lifecycle flaws in `startCameraDecoder` (`core/qr/light.ts`):
+  1. **Detached `play()`** — the light matcher's camera (`matchLightSession` → `LightTransport({camera:true})`) is created at session-pick time with **no preview element**. The `<video>` was created with `play()` called while the element was NOT in the document, and only inserted later via `attachPreview(el)`. Playing a detached video is fragile on mobile browsers (notably iOS Safari) and can leave it black.
+  2. **Re-render detaches the video** — the receiver's `CameraBox` preview div is a React-rendered element that is **unmounted between screens** (waiting → transfer). The video was imperatively inserted into that div, so React unmounting the div removed the video from the DOM. Browsers **pause a `<video>` when it leaves the DOM**, and `attachPreview` only re-inserted the element — it never resumed playback → frozen/black camera. This matches "after pairing" (pairing completes → go → transfer screen → black).
+- **Fix** (both in `core/qr/light.ts` `startCameraDecoder`):
+  - The video is now **always connected to the document**: if no preview container exists yet, it is parked in a hidden 1×1 offscreen host div (added to `document.body`, `aria-hidden`, cleaned up in `stopStream`). `play()` therefore always runs on a connected element and the camera decodes from the start (including on the match screen, where no preview box is rendered).
+  - `attachPreview(el)` re-issues `video.play()` after re-attaching **when the video is paused**, so the waiting→transfer screen change no longer leaves the camera frozen/black.
+- **Regression tests** (`core/qr/light.test.ts`, +2, total **138**): a `node`-environment DOM stub (fake `document`/`navigator`/video, no new deps) verifies (a) a preview-less camera is parked in the hidden host and playing from the start, and (b) after the preview div is removed (browser pause simulated) and a new preview is attached, the video is re-played (`playCalls ≥ 2`) and lives in the new container. Verified the second test FAILS with the fix disabled, passes with it.
+- Reproduction attempt via a canvas-fed fake camera (Playwright + `canvas.captureStream`) hit a headless-Chrome canvas-stream frame-fidelity quirk (video frames 1.07× scaled / stale) unrelated to real cameras — QR decode blocked the harness, so the fix is validated by the unit-level lifecycle test instead of a full UI E2E. **Verify on a real device: confirm the camera stays live across words-match → waiting → transfer.**
+- 138 tests, typecheck clean, build clean. Pending: commit + push from vercel-deploy, verify on live. Root tree is not git — always sync changed files over to `vercel-deploy` before committing.
+
+### Previous chapters (2026-08-15) — FOUNTAIN-CODED QR TRANSFER (LT codes, ~1 KB symbols, frame-rate slider; last commit 538d79e)
 
 ### 2026-08-15 — fountain (Luby Transform) coding for the light channel (user request: "fountain coding so the receiver only needs a few more pieces than the total count")
 - **New `core/qr/fountain.ts`**: a hand-rolled LT codec + broadcast session layer, zero new deps (`qrcode`/`jsqr` already present, matching the project's hand-rolled modem/DSP style).
