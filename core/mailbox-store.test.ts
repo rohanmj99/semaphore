@@ -135,15 +135,17 @@ describe("KvMailboxStore", () => {
 });
 
 describe("kvFromEnv", () => {
-  it("builds Upstash REST URLs with the key in the path", async () => {
+  it("builds Upstash REST URLs with the key in the path and Bearer auth", async () => {
     const envUrl = process.env.KV_REST_API_URL;
     const envToken = process.env.KV_REST_API_TOKEN;
     process.env.KV_REST_API_URL = "https://unit-test.upstash.io";
     process.env.KV_REST_API_TOKEN = "tok";
     const seen: string[] = [];
+    const seenAuth: (string | undefined)[] = [];
     const origFetch = globalThis.fetch;
-    (globalThis as { fetch: unknown }).fetch = (url: string | URL | Request) => {
+    (globalThis as { fetch: unknown }).fetch = (url: string | URL | Request, init?: { headers?: Record<string, string> }) => {
       seen.push(String(url));
+      seenAuth.push(init?.headers?.authorization);
       return Promise.resolve({ ok: true, json: () => Promise.resolve([]) } as Response);
     };
     try {
@@ -154,11 +156,12 @@ describe("kvFromEnv", () => {
       await kv!.expire("mailbox:abc:go", 600);
       await kv!.ttl("mailbox:abc:go");
       expect(seen).toEqual([
-        "https://unit-test.upstash.io/zrange/mailbox%3Aabc%3Ago/0/-1?API_KEY=tok",
-        "https://unit-test.upstash.io/zadd/mailbox%3Aabc%3Ago/1/%7B%22i%22%3A1%2C%22p%22%3A%22hi%22%7D?API_KEY=tok",
-        "https://unit-test.upstash.io/expire/mailbox%3Aabc%3Ago/600?API_KEY=tok",
-        "https://unit-test.upstash.io/ttl/mailbox%3Aabc%3Ago?API_KEY=tok",
+        "https://unit-test.upstash.io/zrange/mailbox%3Aabc%3Ago/0/-1",
+        "https://unit-test.upstash.io/zadd/mailbox%3Aabc%3Ago/1/%7B%22i%22%3A1%2C%22p%22%3A%22hi%22%7D",
+        "https://unit-test.upstash.io/expire/mailbox%3Aabc%3Ago/600",
+        "https://unit-test.upstash.io/ttl/mailbox%3Aabc%3Ago",
       ]);
+      expect(seenAuth).toEqual(["Bearer tok", "Bearer tok", "Bearer tok", "Bearer tok"]);
     } finally {
       (globalThis as { fetch: unknown }).fetch = origFetch;
       if (envUrl === undefined) delete process.env.KV_REST_API_URL;

@@ -110,7 +110,9 @@ async function kvFetch(baseUrl: string, token: string, args: unknown[]): Promise
       return encodeURIComponent(JSON.stringify(a));
     })
     .join("/");
-  const res = await fetch(`${baseUrl}/${path}?API_KEY=${encodeURIComponent(token)}`);
+  const res = await fetch(`${baseUrl}/${path}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
   if (!res.ok) {
     throw new Error(`KV request failed (${res.status})`);
   }
