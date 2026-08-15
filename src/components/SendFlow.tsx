@@ -17,6 +17,7 @@ import {
   IconFile,
   IconLight,
   IconOnline,
+  IconRepeat,
   IconSound,
   IconX,
 } from "../icons.tsx";
@@ -352,6 +353,27 @@ export function SendFlow() {
               : "The file is on the receiving device. Nothing was routed through a server."}
           </p>
           {sender.hash && <p className="hashbox">checksum {sender.hash}</p>}
+          {(sender.channel === "light" || sender.channel === "sound") && (
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => {
+                controllerRef.current?.resend();
+                setSender({
+                  screen: "waiting",
+                  wordPair: controllerRef.current?.wordPair ?? sender.wordPair,
+                  channel: sender.channel,
+                  link: sender.link,
+                  peerFingerprint: null,
+                  stats: null,
+                  note: "Re-announcing — pick up the receive screen on the other device.",
+                });
+              }}
+            >
+              <IconRepeat />
+              Broadcast again
+            </button>
+          )}
           <div className="spacer" />
           <button
             type="button"

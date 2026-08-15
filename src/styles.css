@@ -164,21 +164,6 @@ h2 {
   cursor: wait;
 }
 
-.campreview {
-  margin: 0.5rem 0 0.25rem;
-  border-radius: 0.75rem;
-  overflow: hidden;
-  background: #000;
-  aspect-ratio: 4 / 3;
-}
-
-.campreview video {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
 .mono {
   font-variant-numeric: tabular-nums;
 }
@@ -505,8 +490,183 @@ button:focus-visible {
   border-radius: 14px;
 }
 
+.qrcard-frame {
+  width: min(100%, 460px);
+  margin-inline: auto;
+  padding: 16px;
+  border: 1px solid var(--hairline);
+  border-radius: 22px;
+  background:
+    radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 60%),
+    var(--bg);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+.qrcard-frame .qrcard {
+  width: 100%;
+}
+
+.qrcard-mark {
+  display: block;
+  margin-top: 10px;
+  text-align: center;
+  font-size: 0.68rem;
+  letter-spacing: 0.34em;
+  color: var(--faint);
+}
+
 .qrcard-wrap {
   padding: 14px;
+}
+
+/* Camera box — live preview with scan animation + corner guides */
+.cambox {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0.5rem 0 0.25rem;
+}
+
+.camstage {
+  position: relative;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  background: #000;
+  aspect-ratio: 4 / 3;
+}
+
+.campreview {
+  position: absolute;
+  inset: 0;
+}
+
+.campreview video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.scanline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 26%;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    color-mix(in srgb, var(--accent) 45%, transparent) 50%,
+    transparent
+  );
+  animation: scan-sweep 2.4s ease-in-out infinite;
+  mix-blend-mode: screen;
+}
+
+@keyframes scan-sweep {
+  0% {
+    top: -26%;
+  }
+  50% {
+    top: 100%;
+  }
+  100% {
+    top: -26%;
+  }
+}
+
+.camcorner {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border: 3px solid var(--accent);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+.camcorner.tl {
+  top: 10px;
+  left: 10px;
+  border-right: none;
+  border-bottom: none;
+  border-radius: 8px 0 0 0;
+}
+
+.camcorner.tr {
+  top: 10px;
+  right: 10px;
+  border-left: none;
+  border-bottom: none;
+  border-radius: 0 8px 0 0;
+}
+
+.camcorner.bl {
+  bottom: 10px;
+  left: 10px;
+  border-right: none;
+  border-top: none;
+  border-radius: 0 0 0 8px;
+}
+
+.camcorner.br {
+  bottom: 10px;
+  right: 10px;
+  border-left: none;
+  border-top: none;
+  border-radius: 0 0 8px 0;
+}
+
+.camstatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.camdot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--faint);
+  flex: none;
+  transition: background 150ms ease-out;
+}
+
+.camdot.on {
+  background: #22c55e;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #22c55e 25%, transparent);
+}
+
+button.ghost.small {
+  align-self: flex-start;
+  min-height: 0;
+  padding: 6px 12px;
+  font-size: 0.85rem;
+}
+
+.okbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, #22c55e 40%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, #22c55e 10%, transparent);
+  color: #15803d;
+}
+
+.warn {
+  color: #b45309;
+  border-color: color-mix(in srgb, #f59e0b 40%, transparent);
+}
+
+.hint.warn {
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, #f59e0b 40%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, #f59e0b 8%, transparent);
 }
 
 .sessiontag {

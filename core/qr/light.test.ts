@@ -109,6 +109,20 @@ describe("qr render + decode", () => {
     expect(img.width).toBe(img.height);
     expect(decodeQr(img.rgba, img.width, img.height)).toEqual(payload);
   });
+
+  it("stays decodable with the custom design (ink/paper/rounded)", () => {
+    const payload = new TextEncoder().encode("semaphore branded qr");
+    const m = renderQr(payload);
+    const img = paintQr(m, 8, 4, { ink: [23, 20, 36], paper: [248, 246, 240], round: 0.42 });
+    expect(decodeQr(img.rgba, img.width, img.height)).toEqual(payload);
+  });
+
+  it("clamps the design rounding to a decodable range", () => {
+    const payload = new TextEncoder().encode("round me");
+    const m = renderQr(payload);
+    const img = paintQr(m, 8, 4, { round: 9 });
+    expect(decodeQr(img.rgba, img.width, img.height)).toEqual(payload);
+  });
 });
 
 describe("light transport", () => {

@@ -40,6 +40,9 @@ interface SendQueue {
   display?: LightTransport;
   onMatch(cb: (peer: { receiverFingerprint: string }) => void): void;
   notifyGo(): void;
+  /** Broadcast channels only: re-start announcing after the transfer ended,
+   *  so a receiver that missed it can match and receive it again. */
+  reannounce?(): void;
   start(
     cb: (keys: { sessionKey: Uint8Array; channel: import("@core/transports").TransportEndpoint; receiverFingerprint: string }) => void,
   ): void;
@@ -139,6 +142,9 @@ export class SendController {
       notifyGo() {
         sound.notifyGo();
       },
+      reannounce() {
+        sound.reannounce();
+      },
       start(cb) {
         sound.start((keys) => {
           cb({ sessionKey: keys.sessionKey, channel: keys.channel, receiverFingerprint: keys.receiverFingerprint });
@@ -164,6 +170,9 @@ export class SendController {
       },
       notifyGo() {
         light.notifyGo();
+      },
+      reannounce() {
+        light.reannounce();
       },
       start(cb) {
         light.start((keys) => {
@@ -198,26 +207,50 @@ export class SendController {
     });
     queue.start(({ sessionKey, channel }) => {
       if (this.settled) return;
-      this.cb.onTransferring();
-      const broadcast = this.channel === "sound" || this.channel === "light";
-      this.stream = new StreamSender(this.sessionId, sessionKey, this.source, {
-        noAck: broadcast,
-        chunkSize: broadcast ? (this.channel === "light" ? LIGHT_CHUNK_BYTES : SOUND_CHUNK_BYTES) : undefined,
-        maxPasses: broadcast ? NO_ACK_PASSES : undefined,
-        onHeader: (h) => {
-          this.completedHash = h.crc32.toString(16).padStart(8, "0");
-        },
-        onEvent: (e) => {
-          if (this.settled) return;
-          if (e.type === "error") this.cb.onError(e.message);
-          if (e.type === "done") this.cb.onDone(this.completedHash);
-        },
-      });
-      this.stream.run(channel);
+      this.spawnStream(sessionKey, channel);
+    });
+  }
+
+  /** (Re)start the stream on the negotiated channel. In broadcast mode
+   *  (sound/light) this re-broadcasts the whole transfer from the start —
+   *  used by "Broadcast again" so a receiver that missed the first passes
+   *  can still catch the file. */
+  private spawnStream(sessionKey: Uint8Array, channel: import("@core/transports").TransportEndpoint) {
+    this.completedHash = null;
+    this.cb.onTransferring();
+    const broadcast = this.channel === "sound" || this.channel === "light";
+    this.stream = new StreamSender(this.sessionId, sessionKey, this.source, {
+      noAck: broadcast,
+      chunkSize: broadcast ? (this.channel === "light" ? LIGHT_CHUNK_BYTES : SOUND_CHUNK_BYTES) : undefined,
+      maxPasses: broadcast ? NO_ACK_PASSES : undefined,
+      onHeader: (h) => {
+        this.completedHash = h.crc32.toString(16).padStart(8, "0");
+      },
+      onEvent: (e) => {
+        if (this.settled) return;
+        if (e.type === "error") this.cb.onError(e.message);
+        if (e.type === "done") this.cb.onDone(this.completedHash);
+      },
+    });
+    this.stream.run(channel);
+    if (!this.statsTimer) {
       this.statsTimer = setInterval(() => {
         if (this.stream && !this.settled) this.cb.onStats(this.stream.stats.snapshot());
       }, 250);
-    });
+    }
+  }
+
+  /** Broadcast channels only: re-start announcing so the other device can
+   *  match and receive the transfer again. Resolves false when there's
+   *  nothing to re-announce (e.g. already re-announcing). */
+  resend(): boolean {
+    if (this.settled || !this.queue) return false;
+    const broadcast = this.channel === "sound" || this.channel === "light";
+    if (!broadcast || !this.queue.reannounce) return false;
+    this.stream?.cancel();
+    this.stream = null;
+    this.queue.reannounce();
+    return true;
   }
 
   confirmMatch() {

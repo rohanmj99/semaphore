@@ -25,6 +25,11 @@ export interface MatcherLike {
   postReady(): void;
   onState?(cb: (state: NegotiatorState) => void): void;
   onFailure?(cb: (message: string) => void): void;
+  /** Light channel only: swap the matching camera between front/back. */
+  switchCamera?(): Promise<boolean>;
+  cameraFacing?(): "environment" | "user" | null;
+  lastDecodeMs?(): number;
+  attachPreview?(el: HTMLElement): void;
   cancel(): void;
 }
 
@@ -89,6 +94,26 @@ export class ReceiveController {
   /** Light channel: the transport whose current fragment is the match QR. */
   get matchDisplay(): LightTransport | null {
     return this.matcher.display ?? null;
+  }
+
+  /** Swap the receive camera (light channel) between front and back. */
+  switchCamera(): Promise<boolean> {
+    return this.matcher.switchCamera?.() ?? Promise.resolve(false);
+  }
+
+  /** Current receive-camera facing (light channel), or null. */
+  cameraFacing(): "environment" | "user" | null {
+    return this.matcher.cameraFacing?.() ?? null;
+  }
+
+  /** Milliseconds since the receive camera last decoded a QR (light). */
+  lastDecodeMs(): number {
+    return this.matcher.lastDecodeMs?.() ?? 0;
+  }
+
+  /** Attach the receive-camera preview to a container (light channel). */
+  attachPreview(el: HTMLElement): void {
+    this.matcher.attachPreview?.(el);
   }
 
   confirm() {

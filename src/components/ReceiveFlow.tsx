@@ -4,7 +4,12 @@ import { nearbyMatcher, ReceiveController, ensureStorageFits } from "../engine/r
 import { wakeLock } from "../engine/wakelock.ts";
 import { scanForSessions, pairingSupported, type VisibleSession } from "@core/pairing";
 import { scanSoundSessions, soundRxSupport } from "@core/modem/sound";
-import { scanLightSessions, lightSupported } from "@core/qr/light";
+import {
+  scanLightSessions,
+  lightSupported,
+  type CameraFacing,
+  type LightScanHandle,
+} from "@core/qr/light";
 import { fmtBytes, fmtDuration } from "@core/util";
 import { ProgressRing } from "./ProgressRing.tsx";
 import { QrCard } from "./QrCard.tsx";
@@ -16,6 +21,7 @@ import {
   IconDownload,
   IconEar,
   IconFile,
+  IconRepeat,
   IconX,
 } from "../icons.tsx";
 
@@ -57,6 +63,42 @@ function downloadFile(entry: ReceivedFile) {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
+/** Live camera box: video preview, scanning animation, a "QR seen" status
+ *  line and a front/back camera switcher. Used on the listen, waiting and
+ *  transfer screens of the light channel. */
+function CameraBox({
+  previewRef,
+  status,
+  onSwitch,
+}: {
+  previewRef: React.Ref<HTMLDivElement>;
+  status: { seen: boolean; facing: CameraFacing | null };
+  onSwitch?: () => void;
+}) {
+  return (
+    <div className="cambox">
+      <div className="camstage">
+        <div className="campreview" ref={previewRef} />
+        <div className="scanline" aria-hidden="true" />
+        <span className="camcorner tl" aria-hidden="true" />
+        <span className="camcorner tr" aria-hidden="true" />
+        <span className="camcorner bl" aria-hidden="true" />
+        <span className="camcorner br" aria-hidden="true" />
+      </div>
+      <div className="camstatus" aria-live="polite">
+        <span className={`camdot ${status.seen ? "on" : ""}`} />
+        {status.seen ? "QR spotted — keep it in frame" : "Scanning for QR codes…"}
+      </div>
+      {onSwitch && (
+        <button type="button" className="ghost small" onClick={onSwitch}>
+          <IconRepeat />
+          {status.facing === "user" ? "Use back camera" : "Use front camera"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function ReceiveFlow() {
   const receiver = useApp((s) => s.receiver);
   const setReceiver = useApp((s) => s.setReceiver);
@@ -72,7 +114,36 @@ export function ReceiveFlow() {
   const [nearbyOn, setNearbyOn] = useState(true);
   const [micOn, setMicOn] = useState(false);
   const [camOn, setCamOn] = useState(false);
+  const [camFacing, setCamFacing] = useState<CameraFacing | null>(null);
+  const [camSeen, setCamSeen] = useState(false);
   const [pendingPermission, setPendingPermission] = useState<"mic" | "cam" | null>(null);
+  const lightScanRef = useRef<LightScanHandle | null>(null);
+  const waitingCamRef = useRef<HTMLDivElement | null>(null);
+  const transferCamRef = useRef<HTMLDivElement | null>(null);
+  const [waitingSeen, setWaitingSeen] = useState(false);
+  const [waitingFacing, setWaitingFacing] = useState<CameraFacing | null>(null);
+  const [transferSeen, setTransferSeen] = useState(false);
+  const [transferFacing, setTransferFacing] = useState<CameraFacing | null>(null);
+
+  const switchCam = async () => {
+    const ok = await lightScanRef.current?.switchCamera();
+    if (!ok) setScanIssue("Couldn't switch the camera on this device.");
+    else setCamFacing(lightScanRef.current?.cameraFacing() ?? null);
+  };
+
+  const switchMatchCam = async () => {
+    const ok = await controllerRef.current?.switchCamera();
+    if (!ok) {
+      if (useApp.getState().receiver.screen === "transfer") {
+        setReceiver({ note: "Couldn't switch the camera — using the current one." });
+      } else {
+        setReceiver({ screen: "error", error: "Couldn't switch the camera on this device." });
+      }
+      return;
+    }
+    setWaitingFacing(controllerRef.current?.cameraFacing() ?? null);
+    setTransferFacing(controllerRef.current?.cameraFacing() ?? null);
+  };
 
   const toggleMic = async () => {
     if (micOn) {
@@ -107,7 +178,7 @@ export function ReceiveFlow() {
     setPendingPermission("cam");
     try {
       const s = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
+        video: { facingMode: camFacing ?? "environment" },
       });
       s.getTracks().forEach((t) => t.stop());
       setCamOn(true);
@@ -157,10 +228,19 @@ export function ReceiveFlow() {
       const scan = scanLightSessions(
         (l) => tag(l, "light"),
         note,
-        camPreviewRef.current ? { preview: camPreviewRef.current } : undefined,
+        { preview: camPreviewRef.current ?? undefined, facing: camFacing ?? undefined },
       );
+      lightScanRef.current = scan;
+      setCamFacing(scan.cameraFacing());
+      const poll = setInterval(() => {
+        const last = lightScanRef.current?.lastDecodeMs() ?? 0;
+        setCamSeen(Date.now() - last < 2500);
+      }, 600);
       stops.push(() => {
+        clearInterval(poll);
         scan.stop();
+        lightScanRef.current = null;
+        setCamSeen(false);
         if (camPreviewRef.current) camPreviewRef.current.replaceChildren();
       });
     }
@@ -175,6 +255,28 @@ export function ReceiveFlow() {
   useEffect(() => {
     if (receiver.screen !== "transfer") return;
     return wakeLock();
+  }, [receiver.screen]);
+
+  // Light channel: attach the matcher's live camera to the waiting + transfer
+  // screens so the user can aim, and surface a "QR seen" status line.
+  useEffect(() => {
+    if (receiver.screen !== "waiting" && receiver.screen !== "transfer") return;
+    if (chosenChannel.current !== "light") return;
+    const el = receiver.screen === "waiting" ? waitingCamRef.current : transferCamRef.current;
+    if (el) controllerRef.current?.attachPreview(el);
+    setWaitingFacing(controllerRef.current?.cameraFacing() ?? null);
+    setTransferFacing(controllerRef.current?.cameraFacing() ?? null);
+    const poll = setInterval(() => {
+      const last = controllerRef.current?.lastDecodeMs() ?? 0;
+      const seen = Date.now() - last < 3000;
+      if (receiver.screen === "waiting") setWaitingSeen(seen);
+      else setTransferSeen(seen);
+    }, 600);
+    return () => {
+      clearInterval(poll);
+      setWaitingSeen(false);
+      setTransferSeen(false);
+    };
   }, [receiver.screen]);
 
   const pickSession = async (session: ScannedSession) => {
@@ -328,7 +430,13 @@ export function ReceiveFlow() {
             </button>
           </div>
           {camOn && lightSupported() && (
-            <div className="campreview" ref={camPreviewRef} aria-hidden="true" />
+            <CameraBox previewRef={camPreviewRef} status={{ seen: camSeen, facing: camFacing }} onSwitch={() => void switchCam()} />
+          )}
+          {camOn && lightSupported() && (
+            <p className="hint">
+              Point the camera at the other screen's <strong>flashing QR codes</strong> — the
+              sender keeps re-broadcasting until the transfer arrives, so hold steady.
+            </p>
           )}
           {scanIssue ? (
             <p className="hint warn" role="alert">
@@ -435,9 +543,16 @@ export function ReceiveFlow() {
         <>
           <h2>Waiting</h2>
           {chosenChannel.current === "light" && controllerRef.current?.matchDisplay && (
-            <div className="qrcard-wrap">
-              <QrCard transport={controllerRef.current.matchDisplay} />
-            </div>
+            <>
+              <div className="qrcard-wrap">
+                <QrCard transport={controllerRef.current.matchDisplay} />
+              </div>
+              <CameraBox
+                previewRef={waitingCamRef}
+                status={{ seen: waitingSeen, facing: waitingFacing }}
+                onSwitch={() => void switchMatchCam()}
+              />
+            </>
           )}
           <div className="live">
             <IconEar className="big pulse" />
@@ -445,7 +560,7 @@ export function ReceiveFlow() {
           </div>
           <p className="hint">
             {chosenChannel.current === "light"
-              ? "Hold the phones close, camera to screen. The transfer starts automatically."
+              ? "Hold the phones close, camera to screen. The transfer starts automatically — keep the flashing QR inside the box."
               : chosenChannel.current === "sound"
                 ? "Keep this screen open near the sending device. The transfer starts automatically."
                 : "Keep this screen open. The transfer starts automatically."}
@@ -475,7 +590,10 @@ export function ReceiveFlow() {
               <div className="hint">{fmtBytes(receiver.file.size)}</div>
             </div>
           </div>
-          <p className="hashbox">checksum {receiver.file.hash}</p>
+          <p className="okbox">
+            <IconCheck />
+            File verified — checksum {receiver.file.hash}
+          </p>
           <div className="spacer" />
           <button
             type="button"
@@ -535,7 +653,18 @@ export function ReceiveFlow() {
           </div>
         </div>
         {chosenChannel.current === "light" && (
-          <p className="hint">Keep the phones facing each other until it finishes.</p>
+          <>
+            <CameraBox
+              previewRef={transferCamRef}
+              status={{ seen: transferSeen, facing: transferFacing }}
+              onSwitch={() => void switchMatchCam()}
+            />
+            <p className={`hint ${transferSeen ? "" : "warn"}`} role={transferSeen ? undefined : "alert"}>
+              {transferSeen
+                ? "Keep the phones facing each other — the QR is being read."
+                : "No QR seen — point the camera back at the sending screen. The sender repeats everything until you catch it."}
+            </p>
+          </>
         )}
         {chosenChannel.current === "sound" && (
           <p className="hint">Keep the phones close until it finishes.</p>

@@ -1,5 +1,14 @@
 import { useEffect, useRef } from "react";
-import { LIGHT_FRAME_MS, LightTransport, paintQr, renderQr } from "@core/qr/light";
+import { LIGHT_FRAME_MS, LightTransport, paintQr, renderQr, type QrDesign } from "@core/qr/light";
+
+/** Semaphore's custom QR look — deep ink, warm paper, rounded modules. The
+ *  module grid stays standard so any QR scanner (including the app's own
+ *  jsQR decoder) still reads it. */
+const SEMAPHORE_DESIGN: QrDesign = {
+  ink: [23, 20, 36],
+  paper: [248, 246, 240],
+  round: 0.42,
+};
 
 /** Paints the current QR fragment of a light transport and animates it at the
  *  channel's frame pace. Callers must pass a live transport (the controller's
@@ -26,7 +35,7 @@ export function QrCard({ transport, maxSize = 460 }: { transport: LightTransport
       const matrix = renderQr(frag);
       const avail = Math.min(canvas.parentElement?.clientWidth ?? maxSize, maxSize);
       const scale = Math.max(2, Math.min(10, Math.floor(avail / (matrix.size + 8))));
-      const img = paintQr(matrix, scale, 4);
+      const img = paintQr(matrix, scale, 4, SEMAPHORE_DESIGN);
       canvas.width = img.width;
       canvas.height = img.height;
       ctx.putImageData(new ImageData(img.rgba, img.width, img.height), 0, 0);
@@ -39,5 +48,10 @@ export function QrCard({ transport, maxSize = 460 }: { transport: LightTransport
     };
   }, [transport, maxSize]);
 
-  return <canvas ref={canvasRef} className="qrcard" role="img" aria-label="Animated QR code" />;
+  return (
+    <div className="qrcard-frame">
+      <canvas ref={canvasRef} className="qrcard" role="img" aria-label="Animated QR code" />
+      <span className="qrcard-mark">SEMA·PHORE</span>
+    </div>
+  );
 }

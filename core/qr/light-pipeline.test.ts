@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { frameMessage, parseMessage } from "../frames.ts";
-import { fragmentLight, LightTransport, matchLightSession, paintQr, renderQr } from "./light.ts";
+import {
+  advertiseLight,
+  fragmentLight,
+  LightTransport,
+  matchLightSession,
+  paintQr,
+  renderQr,
+} from "./light.ts";
 import { deriveKxSessionKey, keypair } from "../crypto.ts";
 import { fromBase64Url, toBase64Url } from "../util.ts";
 import { encodeHeaderWire, ManifestBuilder } from "../chunker.ts";
@@ -103,6 +110,45 @@ describe("light receive pipeline", () => {
     expect(events).toContain("phase:running");
     expect(events.some((e) => e.startsWith("chunk"))).toBe(true);
     expect(events).toContain("phase:verifying");
+    matcher.cancel();
+  });
+
+  it("advertiseLight reannounces after a completed broadcast", async () => {
+    const sender = advertiseLight({ name: "again.txt", size: 10 });
+    const matches: string[] = [];
+    sender.onMatch((p) => matches.push(p.receiverFingerprint));
+
+    const announceFrag = sender.display.currentFrag();
+    expect(announceFrag).not.toBeNull();
+    const announce = JSON.parse(new TextDecoder().decode(announceFrag!.slice(10))) as { sessionId: string; wordPair: string };
+    expect(announce.sessionId).toBe(sender.sessionId);
+    expect(announce.wordPair).toBe(sender.wordPair);
+
+    // A receiver matches, then the broadcast finishes; reannounce must reset
+    // the queue so the session is discoverable again.
+    sender.reannounce();
+    const frag2 = sender.display.currentFrag();
+    expect(frag2).not.toBeNull();
+    const msg2 = JSON.parse(new TextDecoder().decode(frag2!.slice(10))) as { sessionId: string; wordPair: string };
+    expect(msg2.sessionId).toBe(sender.sessionId);
+    expect(msg2.wordPair).toBe(sender.wordPair);
+    sender.stop();
+  });
+
+  it("matchLightSession exposes camera controls", async () => {
+    const kp = keypair();
+    const session = {
+      sessionId: "abcdefabcdef1234",
+      wordPair: "camera-test",
+      senderFingerprint: "cafebabe",
+      senderPub: toBase64Url(kp.publicKey),
+      file: null,
+      seenAt: Date.now(),
+    };
+    const matcher = matchLightSession(session);
+    expect(typeof matcher.switchCamera).toBe("function");
+    expect(typeof matcher.attachPreview).toBe("function");
+    expect(matcher.lastDecodeMs()).toBeGreaterThanOrEqual(0);
     matcher.cancel();
   });
 });

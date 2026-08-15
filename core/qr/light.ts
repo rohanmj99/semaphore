@@ -129,30 +129,44 @@ export function renderQr(data: Uint8Array, errorCorrectionLevel: "L" | "M" | "Q"
   return { size: m.size, bits: new Uint8Array(m.data.buffer, m.data.byteOffset, m.data.byteLength) };
 }
 
+export interface QrDesign {
+  /** Module ink color, default black. */
+  ink?: readonly [number, number, number];
+  /** Paper (background) color, default white. */
+  paper?: readonly [number, number, number];
+  /** Module corner rounding as a fraction of a module (0–0.5). */
+  round?: number;
+}
+
 /**
  * Rasterize a module matrix to RGBA pixels (black modules, white background,
  * with a surrounding quiet zone). Pure computation — works in tests and on
- * canvas via putImageData.
+ * canvas via putImageData. A custom design (ink/paper color, rounded module
+ * corners) keeps the QR decodable — jsQR only needs dark/light contrast.
  */
 export function paintQr(
   matrix: QrMatrix,
   scale = 8,
   quiet = 4,
+  design: QrDesign = {},
 ): { width: number; height: number; rgba: Uint8ClampedArray<ArrayBuffer> } {
   const n = matrix.size;
   const size = (n + quiet * 2) * scale;
+  const ink = design.ink ?? [0, 0, 0];
+  const paper = design.paper ?? [255, 255, 255];
+  const r = Math.max(0, Math.min(0.5, design.round ?? 0)) * scale;
   const rgba = new Uint8ClampedArray(size * size * 4);
-  const set = (x: number, y: number, v: number) => {
+  const set = (x: number, y: number, v: readonly [number, number, number]) => {
     const i = (y * size + x) * 4;
-    rgba[i] = v;
-    rgba[i + 1] = v;
-    rgba[i + 2] = v;
+    rgba[i] = v[0];
+    rgba[i + 1] = v[1];
+    rgba[i + 2] = v[2];
     rgba[i + 3] = 255;
   };
   for (let i = 0; i < size * size; i++) {
-    rgba[i * 4] = 255;
-    rgba[i * 4 + 1] = 255;
-    rgba[i * 4 + 2] = 255;
+    rgba[i * 4] = paper[0];
+    rgba[i * 4 + 1] = paper[1];
+    rgba[i * 4 + 2] = paper[2];
     rgba[i * 4 + 3] = 255;
   }
   for (let y = 0; y < n; y++) {
@@ -162,7 +176,19 @@ export function paintQr(
       const py = (y + quiet) * scale;
       for (let dy = 0; dy < scale; dy++) {
         for (let dx = 0; dx < scale; dx++) {
-          set(px + dx, py + dy, 0);
+          let dark = true;
+          if (r > 0) {
+            // Distance to the nearest module edge — rounded corners cut the
+            // pixels past the corner radius.
+            const nx = Math.min(dx, scale - 1 - dx);
+            const ny = Math.min(dy, scale - 1 - dy);
+            if (nx < r && ny < r) {
+              const cx = r - nx - 0.5;
+              const cy = r - ny - 0.5;
+              if (cx * cx + cy * cy > r * r) dark = false;
+            }
+          }
+          if (dark) set(px + dx, py + dy, ink);
         }
       }
     }
@@ -183,9 +209,20 @@ export function decodeQr(rgba: Uint8ClampedArray, width: number, height: number)
 /* ------------------------------------------------------------------ */
 /* Camera scanning                                                     */
 
+export type CameraFacing = "environment" | "user";
+
 export interface CameraHandle {
   stop(): void;
   framesScanned(): number;
+  /** Current camera facing, or null if the camera never started. */
+  facing(): CameraFacing | null;
+  /** Swap between the front and back cameras. Resolves false if the
+   *  switch failed (e.g. one camera only) and the previous stream stays. */
+  switchCamera(): Promise<boolean>;
+  /** Attach the live video element to a preview container. */
+  attachPreview(el: HTMLElement): void;
+  /** Milliseconds since a QR was last decoded from the stream (0 = never). */
+  lastDecodeMs(): number;
 }
 
 function canGetVideo(): boolean {
@@ -207,11 +244,11 @@ export function lightSupported(): boolean {
  */
 export function startCameraDecoder(
   onDecode: (payload: Uint8Array) => void,
-  opts: { onError?: (message: string) => void; preview?: HTMLElement } = {},
+  opts: { onError?: (message: string) => void; preview?: HTMLElement; facing?: CameraFacing } = {},
 ): CameraHandle {
   const W = 640;
   const H = 480;
-  const preview = opts.preview ?? null;
+  let preview = opts.preview ?? null;
   let stream: MediaStream | null = null;
   let video: HTMLVideoElement | null = null;
   let canvas: HTMLCanvasElement | null = null;
@@ -220,6 +257,17 @@ export function startCameraDecoder(
   let scanned = 0;
   let stopped = false;
   let errSent = false;
+  let lastDecode = 0;
+  let facing: CameraFacing | null = opts.facing ?? "environment";
+
+  const noop: CameraHandle = {
+    stop() {},
+    framesScanned: () => 0,
+    facing: () => null,
+    switchCamera: async () => false,
+    attachPreview() {},
+    lastDecodeMs: () => 0,
+  };
 
   if (!canGetVideo()) {
     queueMicrotask(() => {
@@ -228,7 +276,7 @@ export function startCameraDecoder(
         opts.onError?.("Camera isn\u2019t available in this browser.");
       }
     });
-    return { stop() {}, framesScanned: () => 0 };
+    return noop;
   }
 
   const tick = () => {
@@ -245,7 +293,10 @@ export function startCameraDecoder(
           scanned++;
           try {
             const payload = decodeQr(img.data, W, H);
-            if (payload) onDecode(payload);
+            if (payload) {
+              lastDecode = Date.now();
+              onDecode(payload);
+            }
           } catch {
             /* skip */
           }
@@ -255,39 +306,57 @@ export function startCameraDecoder(
     raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame(tick) : 0;
   };
 
-  Promise.resolve()
-    .then(() =>
-      navigator.mediaDevices.getUserMedia({
+  const stopStream = () => {
+    if (raf) cancelAnimationFrame(raf);
+    raf = 0;
+    stream?.getTracks().forEach((t) => t.stop());
+    stream = null;
+    if (video) {
+      video.pause?.();
+      video.srcObject = null;
+      video.remove();
+    }
+    video = null;
+    canvas = null;
+  };
+
+  const attachStream = (s: MediaStream): boolean => {
+    if (stopped) {
+      s.getTracks().forEach((t) => t.stop());
+      return false;
+    }
+    stream = s;
+    video = document.createElement("video");
+    video.srcObject = s;
+    video.setAttribute("playsinline", "");
+    video.muted = true;
+    video.autoplay = true;
+    canvas = document.createElement("canvas");
+    if (preview) preview.replaceChildren(video);
+    void video
+      .play()
+      .then(() => {
+        raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame(tick) : 0;
+      })
+      .catch(() => {
+        /* play() interrupted by an early stop() — nothing to do */
+      });
+    return true;
+  };
+
+  const request = (f: CameraFacing) =>
+    navigator.mediaDevices
+      .getUserMedia({
         video: {
-          facingMode: "environment",
+          facingMode: f,
           width: { ideal: 1280 },
           height: { ideal: 720 },
         },
-      }),
-    )
-    .catch(() => navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }))
-    .then((s) => {
-      if (stopped) {
-        s.getTracks().forEach((t) => t.stop());
-        return;
-      }
-      stream = s;
-      video = document.createElement("video");
-      video.srcObject = s;
-      video.setAttribute("playsinline", "");
-      video.muted = true;
-      video.autoplay = true;
-      canvas = document.createElement("canvas");
-      if (preview) preview.replaceChildren(video);
-      void video
-        .play()
-        .then(() => {
-          raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame(tick) : 0;
-        })
-        .catch(() => {
-          /* play() interrupted by an early stop() — nothing to do */
-        });
-    })
+      })
+      .catch(() => navigator.mediaDevices.getUserMedia({ video: { facingMode: f } }));
+
+  request(facing ?? "environment")
+    .then(attachStream)
     .catch(() => {
       if (!stopped && !errSent) {
         errSent = true;
@@ -298,19 +367,31 @@ export function startCameraDecoder(
   return {
     stop() {
       stopped = true;
-      if (raf) cancelAnimationFrame(raf);
-      raf = 0;
-      stream?.getTracks().forEach((t) => t.stop());
-      stream = null;
-      if (video) {
-        video.pause?.();
-        video.srcObject = null;
-        video.remove();
-      }
-      video = null;
-      canvas = null;
+      stopStream();
     },
     framesScanned: () => scanned,
+    facing: () => facing,
+    async switchCamera() {
+      if (stopped || facing === null) return false;
+      const next: CameraFacing = facing === "environment" ? "user" : "environment";
+      stopStream();
+      facing = next;
+      try {
+        return await request(next).then(attachStream);
+      } catch {
+        facing = null;
+        if (!stopped && !errSent) {
+          errSent = true;
+          opts.onError?.("Couldn\u2019t switch the camera.");
+        }
+        return false;
+      }
+    },
+    attachPreview(el: HTMLElement) {
+      preview = el;
+      if (video && el) el.replaceChildren(video);
+    },
+    lastDecodeMs: () => lastDecode,
   };
 }
 
@@ -322,6 +403,7 @@ export interface LightTransportOptions {
   rx?: boolean;
   camera?: boolean;
   preview?: HTMLElement;
+  facing?: CameraFacing;
 }
 
 /**
@@ -349,7 +431,10 @@ export class LightTransport implements TransportEndpoint {
   constructor(opts: LightTransportOptions = {}) {
     this.txOn = opts.tx !== false;
     if (opts.camera) {
-      this.cam = startCameraDecoder((payload) => this.onQrPayload(payload), { preview: opts.preview });
+      this.cam = startCameraDecoder((payload) => this.onQrPayload(payload), {
+        preview: opts.preview,
+        facing: opts.facing,
+      });
     }
   }
 
@@ -363,6 +448,21 @@ export class LightTransport implements TransportEndpoint {
 
   get lastDecodeMs(): number {
     return this.lastDecode;
+  }
+
+  /** Current camera facing, or null when no camera is attached. */
+  cameraFacing(): CameraFacing | null {
+    return this.cam ? this.cam.facing() : null;
+  }
+
+  /** Swap the attached camera between front and back. */
+  async switchCamera(): Promise<boolean> {
+    return this.cam ? this.cam.switchCamera() : false;
+  }
+
+  /** Attach the camera preview to a container element. */
+  attachPreview(el: HTMLElement): void {
+    this.cam?.attachPreview(el);
   }
 
   /** The QR fragment currently on display, or null while idle. */
@@ -460,6 +560,9 @@ export interface LightSenderQueue {
   readonly display: LightTransport;
   onMatch(cb: (peer: { receiverFingerprint: string; receiverPub: string }) => void): void;
   notifyGo(): void;
+  /** Re-start announcing after a completed broadcast, so a receiver that
+   *  missed the transfer can match and receive it again. */
+  reannounce(): void;
   start(
     cb: (keys: { sessionKey: Uint8Array; channel: TransportEndpoint; receiverFingerprint: string }) => void,
   ): void;
@@ -567,6 +670,17 @@ notifyGo() {
         cb({ sessionKey, channel: display, receiverFingerprint });
       }
     },
+    reannounce() {
+      if (stopped) return;
+      matched = false;
+      matchedPub = null;
+      matchedFp = "";
+      if (timer) clearInterval(timer);
+      display.send(announceFrame);
+      timer = setInterval(() => {
+        if (!stopped && !matched) display.send(announceFrame);
+      }, burstMs);
+    },
     start(cb) {
       startHandlers.add(cb);
     },
@@ -595,6 +709,13 @@ export interface LightMatcher {
   onGo(cb: () => void): void;
   postReady(): void;
   onFailure?(cb: (message: string) => void): void;
+  /** Swap the matching camera between front and back. */
+  switchCamera(): Promise<boolean>;
+  cameraFacing(): CameraFacing | null;
+  /** Milliseconds since the matching camera last decoded a QR. */
+  lastDecodeMs(): number;
+  /** Attach the live camera preview to a container element. */
+  attachPreview(el: HTMLElement): void;
   cancel(): void;
 }
 
@@ -674,6 +795,10 @@ export function matchLightSession(
     onFailure(cb) {
       failureHandlers.add(cb);
     },
+    switchCamera: () => channel.switchCamera(),
+    cameraFacing: () => channel.cameraFacing(),
+    lastDecodeMs: () => channel.lastDecodeMs,
+    attachPreview: (el) => channel.attachPreview(el),
     cancel() {
       stopped = true;
       if (burstTimer) clearTimeout(burstTimer);
@@ -692,14 +817,28 @@ export function matchLightSession(
 export interface LightScanHandle {
   stop(): void;
   framesScanned(): number;
+  /** Swap the scanning camera between front and back. */
+  switchCamera(): Promise<boolean>;
+  /** Current camera facing, or null when unavailable. */
+  cameraFacing(): CameraFacing | null;
+  /** Milliseconds since a QR was last decoded (0 = never). */
+  lastDecodeMs(): number;
+  /** Attach the live camera preview to a container element. */
+  attachPreview(el: HTMLElement): void;
 }
 
 export function scanLightSessions(
   onSessions: (list: VisibleSession[]) => void,
   onError?: (message: string) => void,
-  opts: { preview?: HTMLElement } = {},
+  opts: { preview?: HTMLElement; facing?: CameraFacing } = {},
 ): LightScanHandle {
-  const camera = new LightTransport({ tx: false, rx: true, camera: true, preview: opts.preview });
+  const camera = new LightTransport({
+    tx: false,
+    rx: true,
+    camera: true,
+    preview: opts.preview,
+    facing: opts.facing,
+  });
   const map = new Map<string, VisibleSession>();
   let stopped = false;
 
@@ -741,5 +880,9 @@ export function scanLightSessions(
       camera.close();
     },
     framesScanned: () => camera.framesScanned,
+    switchCamera: () => camera.switchCamera(),
+    cameraFacing: () => camera.cameraFacing(),
+    lastDecodeMs: () => camera.lastDecodeMs,
+    attachPreview: (el) => camera.attachPreview(el),
   };
 }

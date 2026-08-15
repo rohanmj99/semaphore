@@ -506,6 +506,9 @@ export interface SoundSenderQueue {
   senderFingerprint: string;
   onMatch(cb: (peer: { receiverFingerprint: string; receiverPub: string }) => void): void;
   notifyGo(): void;
+  /** Re-start announcing after a completed broadcast, so a receiver that
+   *  missed the transfer can match and receive it again. */
+  reannounce(): void;
   start(
     cb: (keys: { sessionKey: Uint8Array; channel: TransportEndpoint; receiverFingerprint: string }) => void,
   ): void;
@@ -625,6 +628,15 @@ export function advertiseSound(
       for (const cb of [...startHandlers]) {
         cb({ sessionKey, channel: tx, receiverFingerprint });
       }
+    },
+    reannounce() {
+      if (stopped) return;
+      matched = false;
+      matchedPub = null;
+      matchedFp = "";
+      if (timer) clearInterval(timer);
+      timer = setInterval(announceStep, burstMs);
+      announceStep();
     },
     start(cb) {
       startHandlers.add(cb);
