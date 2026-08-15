@@ -1,4 +1,4 @@
-const CACHE = "semaphore-v2";
+const CACHE = "semaphore-v3";
 const PRECACHE = [
   "./",
   "./index.html",
@@ -32,6 +32,7 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith("/api/")) return; // API traffic is never cached: the mailbox is a live relay.
   if (request.mode === "navigate") {
     // App shell: always try the network so a fresh build is picked up;
     // fall back to the cached shell when offline.
