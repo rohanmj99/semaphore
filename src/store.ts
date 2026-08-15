@@ -30,6 +30,8 @@ export interface SenderView {
   stats: ProgressStats | null;
   hash: string | null;
   error: string;
+  /** Light channel: QR display pace in ms (frame rate slider). */
+  frameMs?: number;
 }
 
 export type ReceiveScreen = "listen" | "match" | "waiting" | "transfer" | "done" | "error";
@@ -73,6 +75,7 @@ const initialSender: SenderView = {
   stats: null,
   hash: null,
   error: "",
+  frameMs: 100,
 };
 
 const initialReceiver: ReceiverView = {
@@ -110,7 +113,8 @@ export const useApp = create<AppStore>((set, get) => ({
     set({ receiver: { ...get().receiver, ...patch } });
   },
   resetSender() {
-    set({ sender: { ...initialSender } });
+    // Keep the chosen QR frame rate across files — it's a device preference.
+    set({ sender: { ...initialSender, frameMs: get().sender.frameMs } });
   },
   resetReceiver() {
     set({ receiver: { ...initialReceiver } });

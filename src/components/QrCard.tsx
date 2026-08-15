@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { LIGHT_FRAME_MS, LightTransport, paintQr, renderQr, type QrDesign } from "@core/qr/light";
+import { LightTransport, paintQr, renderQr, type QrDesign } from "@core/qr/light";
 
 /** Semaphore's custom QR look — deep ink, warm paper, rounded modules. The
  *  module grid stays standard so any QR scanner (including the app's own
@@ -12,12 +12,22 @@ const SEMAPHORE_DESIGN: QrDesign = {
 
 /** Paints the current QR fragment of a light transport and animates it at the
  *  channel's frame pace. Callers must pass a live transport (the controller's
- *  display or the receiver's match display). */
-export function QrCard({ transport, maxSize = 460 }: { transport: LightTransport | null; maxSize?: number }) {
+ *  display or the receiver's match display). `frameMs` overrides the
+ *  transport's pace (used by the sender's frame-rate slider). */
+export function QrCard({
+  transport,
+  maxSize = 460,
+  frameMs,
+}: {
+  transport: LightTransport | null;
+  maxSize?: number;
+  frameMs?: number;
+}) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
     if (!transport) return;
+    const pace = frameMs ?? transport.frameMs;
     let timer: ReturnType<typeof setInterval> | null = null;
     const paint = () => {
       const canvas = canvasRef.current;
@@ -42,11 +52,11 @@ export function QrCard({ transport, maxSize = 460 }: { transport: LightTransport
       transport.advance();
     };
     paint();
-    timer = setInterval(paint, LIGHT_FRAME_MS);
+    timer = setInterval(paint, pace);
     return () => {
       if (timer) clearInterval(timer);
     };
-  }, [transport, maxSize]);
+  }, [transport, maxSize, frameMs]);
 
   return (
     <div className="qrcard-frame">

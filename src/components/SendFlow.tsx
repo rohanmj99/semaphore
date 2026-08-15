@@ -57,6 +57,34 @@ function WordChips({ pair }: { pair: string }) {
   );
 }
 
+/** Light channel: QR display rate. 1–10 fps (100–1000 ms per frame). */
+function FrameRateSlider({ frameMs, onChange }: { frameMs: number; onChange: (ms: number) => void }) {
+  const fps = Math.round(1000 / frameMs);
+  return (
+    <label className="framerate">
+      <span className="framerate-label">
+        QR speed <strong>{fps} fps</strong>
+      </span>
+      <input
+        type="range"
+        min={100}
+        max={1000}
+        step={100}
+        value={frameMs}
+        onChange={(e) => onChange(Number(e.target.value))}
+        aria-label="QR frame rate"
+      />
+      <span className="hint">
+        {fps >= 8
+          ? "Fast — the camera needs a steady hold to keep up."
+          : fps <= 3
+            ? "Slow — easier for the camera, takes longer."
+            : "A good balance of speed and reliability."}
+      </span>
+    </label>
+  );
+}
+
 export function SendFlow() {
   const sender = useApp((s) => s.sender);
   const setSender = useApp((s) => s.setSender);
@@ -117,6 +145,7 @@ export function SendFlow() {
         channel,
       );
       controllerRef.current = controller;
+      if (channel === "light") controller.setFrameMs(sender.frameMs ?? 100);
       setSender({
         screen: "waiting",
         wordPair: controller.wordPair,
@@ -264,15 +293,24 @@ export function SendFlow() {
             <>
               {sender.channel === "light" && controllerRef.current?.display && (
                 <div className="qrcard-wrap">
-                  <QrCard transport={controllerRef.current.display} />
+                  <QrCard transport={controllerRef.current.display} frameMs={sender.frameMs} />
                 </div>
               )}
               <WordChips pair={sender.wordPair} />
               {sender.channel === "light" && (
-                <p className="hint">
-                  Hold the phones close, camera to screen. On the other device choose{" "}
-                  <strong>Receive</strong> — it should spot this transfer.
-                </p>
+                <>
+                  <p className="hint">
+                    Hold the phones close, camera to screen. On the other device choose{" "}
+                    <strong>Receive</strong> — it should spot this transfer.
+                  </p>
+                  <FrameRateSlider
+                    frameMs={sender.frameMs ?? 100}
+                    onChange={(ms) => {
+                      setSender({ frameMs: ms });
+                      controllerRef.current?.setFrameMs(ms);
+                    }}
+                  />
+                </>
               )}
               {sender.channel === "sound" && (
                 <p className="hint">
@@ -429,8 +467,17 @@ export function SendFlow() {
       <>
         {sender.channel === "light" && controllerRef.current?.display && (
           <div className="qrcard-wrap">
-            <QrCard transport={controllerRef.current.display} />
+            <QrCard transport={controllerRef.current.display} frameMs={sender.frameMs} />
           </div>
+        )}
+        {sender.channel === "light" && (
+          <FrameRateSlider
+            frameMs={sender.frameMs ?? 100}
+            onChange={(ms) => {
+              setSender({ frameMs: ms });
+              controllerRef.current?.setFrameMs(ms);
+            }}
+          />
         )}
         <ProgressRing value={value}>
           <div>

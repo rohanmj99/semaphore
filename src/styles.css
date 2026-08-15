@@ -519,6 +519,32 @@ button:focus-visible {
   padding: 14px;
 }
 
+/* QR frame-rate slider (sender, light channel) */
+.framerate {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0.4rem 0 0.25rem;
+}
+
+.framerate-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.framerate-label strong {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.framerate input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
 /* Camera box — live preview with scan animation + corner guides */
 .cambox {
   display: flex;

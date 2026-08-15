@@ -1,6 +1,7 @@
 import { matchSession, type VisibleSession } from "@core/pairing";
 import { matchOnlineSession, fetchAnnouncement } from "@core/online";
 import { StreamReceiver } from "@core/session";
+import { FountainReceiver } from "@core/qr/fountain";
 import { matchLightSession, type LightTransport } from "@core/qr/light";
 import { matchSoundSession } from "@core/modem/sound";
 import type { ManifestHeader, ProgressStats } from "@core/types";
@@ -46,7 +47,7 @@ const CONFIRM_TIMEOUT_MS = 10 * 60 * 1000;
 export class ReceiveController {
   readonly session: VisibleSession;
   private matcher: MatcherLike;
-  private receiver: StreamReceiver | null = null;
+  private receiver: StreamReceiver | FountainReceiver | null = null;
   private statsTimer: ReturnType<typeof setInterval> | null = null;
   private timeout: ReturnType<typeof setTimeout> | null = null;
   private confirmTimer: ReturnType<typeof setTimeout> | null = null;
@@ -135,10 +136,18 @@ export class ReceiveController {
     }
     this.cb.onTransferring();
     this.matcher.postReady();
-    this.receiver = new StreamReceiver(pin.sessionId, pin.sessionKey, (e) => {
-      if (this.settled) return;
-      if (e.type === "error") this.cb.onError(e.message);
-    });
+    // The light channel uses fountain coding — symbols arrive out of order
+    // and are reassembled by the LT decoder; other channels stream chunks.
+    this.receiver =
+      pin.channel.kind === "light"
+        ? new FountainReceiver(pin.sessionId, pin.sessionKey, (e) => {
+            if (this.settled) return;
+            if (e.type === "error") this.cb.onError(e.message);
+          })
+        : new StreamReceiver(pin.sessionId, pin.sessionKey, (e) => {
+            if (this.settled) return;
+            if (e.type === "error") this.cb.onError(e.message);
+          });
     this.receiver.onComplete((r) => {
       if (this.settled) return;
       this.settleTimeouts();

@@ -1,6 +1,7 @@
 import { advertiseSender, pairingSupported } from "@core/pairing";
 import { advertiseOnline, type OnlineSender } from "@core/online";
 import { StreamSender } from "@core/session";
+import { FountainSender, FOUNTAIN_PASSES, FOUNTAIN_SYMBOL_BYTES } from "@core/qr/fountain";
 import { advertiseLight, lightSupported, type LightSenderQueue, type LightTransport } from "@core/qr/light";
 import { advertiseSound, soundSupport, type SoundSenderQueue } from "@core/modem/sound";
 import type { SliceSource } from "@core/chunker";
@@ -52,9 +53,8 @@ interface SendQueue {
 }
 
 const LINK_EXPIRY_MS = 10 * 60 * 1000;
-/** Broadcast chunk sizes — small so one message fits the channel's window. */
+/** Broadcast chunk size (sound) — small so one message fits the channel's window. */
 const SOUND_CHUNK_BYTES = 4096;
-const LIGHT_CHUNK_BYTES = 8192;
 /** Broadcast mode: bounded cycle count; the UI shows guidance when done. */
 const NO_ACK_PASSES = 6;
 
@@ -66,7 +66,7 @@ export class SendController {
   /** Light channel: animated QR display transport, null on other channels. */
   readonly display: LightTransport | null;
   private queue: SendQueue | null = null;
-  private stream: StreamSender | null = null;
+  private stream: StreamSender | FountainSender | null = null;
   private statsTimer: ReturnType<typeof setInterval> | null = null;
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   private settled = false;
@@ -214,30 +214,48 @@ export class SendController {
   /** (Re)start the stream on the negotiated channel. In broadcast mode
    *  (sound/light) this re-broadcasts the whole transfer from the start —
    *  used by "Broadcast again" so a receiver that missed the first passes
-   *  can still catch the file. */
+   *  can still catch the file. The light channel uses fountain coding:
+   *  ~1 KB symbols broadcast out of order, reassembled by the receiver. */
   private spawnStream(sessionKey: Uint8Array, channel: import("@core/transports").TransportEndpoint) {
     this.completedHash = null;
     this.cb.onTransferring();
     const broadcast = this.channel === "sound" || this.channel === "light";
-    this.stream = new StreamSender(this.sessionId, sessionKey, this.source, {
-      noAck: broadcast,
-      chunkSize: broadcast ? (this.channel === "light" ? LIGHT_CHUNK_BYTES : SOUND_CHUNK_BYTES) : undefined,
-      maxPasses: broadcast ? NO_ACK_PASSES : undefined,
-      onHeader: (h) => {
-        this.completedHash = h.crc32.toString(16).padStart(8, "0");
-      },
-      onEvent: (e) => {
-        if (this.settled) return;
-        if (e.type === "error") this.cb.onError(e.message);
-        if (e.type === "done") this.cb.onDone(this.completedHash);
-      },
-    });
+    const onEvent = (e: { type: string; message?: string; sessionId?: string }) => {
+      if (this.settled) return;
+      if (e.type === "error") this.cb.onError(e.message ?? "send failed");
+      if (e.type === "done") this.cb.onDone(this.completedHash);
+    };
+    if (this.channel === "light") {
+      this.stream = new FountainSender(this.sessionId, sessionKey, this.source, {
+        symbolSize: FOUNTAIN_SYMBOL_BYTES,
+        maxPasses: FOUNTAIN_PASSES,
+        onHeader: (h) => {
+          this.completedHash = h.crc32.toString(16).padStart(8, "0");
+        },
+        onEvent,
+      });
+    } else {
+      this.stream = new StreamSender(this.sessionId, sessionKey, this.source, {
+        noAck: broadcast,
+        chunkSize: broadcast ? SOUND_CHUNK_BYTES : undefined,
+        maxPasses: broadcast ? NO_ACK_PASSES : undefined,
+        onHeader: (h) => {
+          this.completedHash = h.crc32.toString(16).padStart(8, "0");
+        },
+        onEvent,
+      });
+    }
     this.stream.run(channel);
     if (!this.statsTimer) {
       this.statsTimer = setInterval(() => {
         if (this.stream && !this.settled) this.cb.onStats(this.stream.stats.snapshot());
       }, 250);
     }
+  }
+
+  /** Light channel: set the QR display pace (frame rate) mid-transfer. */
+  setFrameMs(ms: number) {
+    if (this.display) this.display.frameMs = ms;
   }
 
   /** Broadcast channels only: re-start announcing so the other device can

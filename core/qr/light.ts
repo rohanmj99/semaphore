@@ -3,6 +3,7 @@ import jsQR from "jsqr";
 import type { TransportEndpoint } from "../transports.ts";
 import { FrameParser, frameMessage } from "../frames.ts";
 import { createSessionId, deriveKxSessionKey, fingerprint, keypair, wordPair } from "../crypto.ts";
+import { crc16 } from "../crc16.ts";
 import { fromBase64Url, nextId, toBase64Url } from "../util.ts";
 import type { SessionAnnouncement, VisibleSession } from "../pairing.ts";
 
@@ -45,6 +46,66 @@ export function fragmentLight(frame: Uint8Array): Uint8Array[] {
     out.push(frag);
   }
   return out;
+}
+
+/**
+ * Fountain symbols — one QR per encoded symbol, no fragmentation or ordering.
+ *
+ * Each symbol is its own broadcast unit: the header carries the total symbol
+ * count K (2 bytes), the encoded symbol id (4 bytes), the payload length and a
+ * per-symbol CRC16. The receiver collects K+ε symbols in any order, missing
+ * frames are simply re-collected from the next pass, and the LT decoder
+ * recovers the file once enough independent symbols arrive.
+ *
+ * Layout: [0x53][0x46][kHi][kLo][id 0..3][lenHi][lenLo][crcHi][crcLo][data...]
+ */
+export const FOUNTAIN_MAGIC1 = 0x53; // 'S'
+export const FOUNTAIN_MAGIC2 = 0x46; // 'F'
+export const FOUNTAIN_HEADER = 12;
+/** Data bytes per fountain symbol (total symbol count capped by 2-byte field). */
+export const FOUNTAIN_MAX_K = 0xffff;
+export const FOUNTAIN_MAX_PAYLOAD = LIGHT_FRAG_SIZE - FOUNTAIN_HEADER;
+
+/** Wrap an encoded symbol payload as a self-contained QR payload. */
+export function fountainSymbol(k: number, id: number, data: Uint8Array): Uint8Array {
+  if (data.length < 1 || data.length > FOUNTAIN_MAX_PAYLOAD) {
+    throw new Error(`fountain symbol payload ${data.length} out of range`);
+  }
+  const out = new Uint8Array(FOUNTAIN_HEADER + data.length);
+  out[0] = FOUNTAIN_MAGIC1;
+  out[1] = FOUNTAIN_MAGIC2;
+  out[2] = (k >> 8) & 0xff;
+  out[3] = k & 0xff;
+  new DataView(out.buffer).setUint32(4, id >>> 0, false);
+  out[8] = (data.length >> 8) & 0xff;
+  out[9] = data.length & 0xff;
+  const c = crc16(data);
+  out[10] = (c >> 8) & 0xff;
+  out[11] = c & 0xff;
+  out.set(data, FOUNTAIN_HEADER);
+  return out;
+}
+
+/** Parse and CRC-verify a fountain symbol QR payload, or null when corrupt. */
+export function parseFountainSymbol(
+  payload: Uint8Array,
+): { k: number; id: number; data: Uint8Array } | null {
+  if (
+    payload.length < FOUNTAIN_HEADER ||
+    payload[0] !== FOUNTAIN_MAGIC1 ||
+    payload[1] !== FOUNTAIN_MAGIC2
+  ) {
+    return null;
+  }
+  const k = (payload[2] << 8) | payload[3];
+  const dv = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  const id = dv.getUint32(4, false);
+  const len = (payload[8] << 8) | payload[9];
+  if (len < 1 || len > FOUNTAIN_MAX_PAYLOAD || payload.length !== FOUNTAIN_HEADER + len) return null;
+  const data = payload.slice(FOUNTAIN_HEADER, FOUNTAIN_HEADER + len);
+  const c = (payload[10] << 8) | payload[11];
+  if (crc16(data) !== c) return null;
+  return { k, id, data };
 }
 
 /**
@@ -404,6 +465,8 @@ export interface LightTransportOptions {
   camera?: boolean;
   preview?: HTMLElement;
   facing?: CameraFacing;
+  /** QR display pace in ms; the transfer frame rate. Defaults to LIGHT_FRAME_MS. */
+  frameMs?: number;
 }
 
 /**
@@ -422,14 +485,17 @@ export class LightTransport implements TransportEndpoint {
   private cursor = 0;
   private cam: CameraHandle | null = null;
   private msgHandlers = new Set<(frame: Uint8Array) => void>();
+  private symbolHandlers = new Set<(sym: { k: number; id: number; data: Uint8Array }) => void>();
   private closeHandlers = new Set<() => void>();
   private closed = false;
   private rescanned = 0;
   private resFrags = 0;
   private lastDecode = 0;
+  private _frameMs: number;
 
   constructor(opts: LightTransportOptions = {}) {
     this.txOn = opts.tx !== false;
+    this._frameMs = opts.frameMs ?? LIGHT_FRAME_MS;
     if (opts.camera) {
       this.cam = startCameraDecoder((payload) => this.onQrPayload(payload), {
         preview: opts.preview,
@@ -470,6 +536,15 @@ export class LightTransport implements TransportEndpoint {
     return this.frags.length > 0 ? this.frags[this.cursor] : null;
   }
 
+  /** Display pace (ms per QR). Mutating it mid-transfer changes the cadence. */
+  get frameMs(): number {
+    return this._frameMs;
+  }
+
+  set frameMs(ms: number) {
+    if (Number.isFinite(ms) && ms > 0) this._frameMs = ms;
+  }
+
   /** Advance the display to the next fragment, cycling. */
   advance(): void {
     if (this.frags.length > 0) this.cursor = (this.cursor + 1) % this.frags.length;
@@ -483,6 +558,13 @@ export class LightTransport implements TransportEndpoint {
   send(frame: Uint8Array): void {
     if (this.closed || !this.txOn) return;
     this.frags = fragmentLight(frame);
+    this.cursor = 0;
+  }
+
+  /** Display one fountain symbol as a single QR (no fragmentation). */
+  sendSymbol(payload: Uint8Array): void {
+    if (this.closed || !this.txOn) return;
+    this.frags = [payload];
     this.cursor = 0;
   }
 
@@ -503,6 +585,13 @@ export class LightTransport implements TransportEndpoint {
     if (this.closed) return;
     this.resFrags++;
     this.lastDecode = Date.now();
+    // Fountain symbols are self-contained broadcast units — route them
+    // straight to the symbol handlers, bypassing fragment reassembly.
+    const sym = parseFountainSymbol(payload);
+    if (sym) {
+      for (const cb of [...this.symbolHandlers]) cb(sym);
+      return;
+    }
     const wire = this.reassembler.push(payload);
     if (!wire) return;
     let complete: Uint8Array[] = [];
@@ -522,6 +611,12 @@ export class LightTransport implements TransportEndpoint {
     return () => this.msgHandlers.delete(cb);
   }
 
+  /** Receive fountain symbols (already CRC-verified, transport-valid). */
+  onSymbol(cb: (sym: { k: number; id: number; data: Uint8Array }) => void): () => void {
+    this.symbolHandlers.add(cb);
+    return () => this.symbolHandlers.delete(cb);
+  }
+
   onClose(cb: () => void): () => void {
     this.closeHandlers.add(cb);
     return () => this.closeHandlers.delete(cb);
@@ -529,11 +624,11 @@ export class LightTransport implements TransportEndpoint {
 
   /**
    * Display pacing: resolves after one full rotation of the current
-   * fragment buffer, so the UI can show every fragment for LIGHT_FRAME_MS
+   * fragment buffer, so the UI can show every fragment for `frameMs`
    * before the next message replaces it on screen.
    */
   idle(): Promise<void> {
-    const rotations = Math.max(this.frags.length, 1) * LIGHT_FRAME_MS;
+    const rotations = Math.max(this.frags.length, 1) * this._frameMs;
     return new Promise((r) => setTimeout(r, rotations));
   }
 
@@ -545,6 +640,7 @@ export class LightTransport implements TransportEndpoint {
     this.frags = [];
     for (const cb of [...this.closeHandlers]) cb();
     this.msgHandlers.clear();
+    this.symbolHandlers.clear();
     this.closeHandlers.clear();
   }
 }
