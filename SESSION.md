@@ -262,3 +262,7 @@ Update this file at the end of every working session. Dates below are session da
 ## 2026-08-18 (2)
 - Live light E2E transfer now COMPLETES after the tryDecode-loop fix (receiver: 64 KB flash.bin, checksum 4de2c2fb verified). Remaining failure: sender never shows 'Sent' on light - FountainSender had maxPasses 0 (cycles forever) -> done() unreachable.
 - FIX: light sender now uses NO_ACK_PASSES (6) like sound (send.ts). 155 tests pass, tsc/build clean.
+
+## 2026-08-18 (3) - LIGHT CHANNEL VERIFIED LIVE
+- e2e-light.mjs: RESULT PASS - full flow on the deployed site (index-CK8owMwU.js): pairing, words match, match confirmed, transfer of 64 KB flash.bin, receiver verified (checksum 4de2c2fb), sender 'Sent', bytes equal, sha256 equal, ui checksum matches, zero console/page errors, paints sender=3 receiver=1319.
+- Root cause chain for the transfer stall: (1) symbol frames (side 64, n=78, 430px card) failed decodeJab in the two-stage bilinear pipeline because the blur-biased arm scale (7.0 vs 7.44) made candidate n=80 (side 66, wrong) beat n=78 on total error; fix = try all candidate grid sizes in error order until RS validates (jab.ts tryDecode loop). (2) sender never showed Sent - FountainSender maxPasses 0 cycled forever; fix = NO_ACK_PASSES (6) for light like sound (send.ts).- Cleanup done: e2e-light.mjs, e2e-temp.txt, samples.json, e2e-out.txt, all diag tests deleted. Commits: c012521 (tryDecode loop), 95dd916+b99a6f0 (finite passes + stray removal).
