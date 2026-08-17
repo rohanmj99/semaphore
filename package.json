@@ -14,10 +14,8 @@
   "dependencies": {
     "dijkstrajs": "^1.0.3",
     "fflate": "^0.8.2",
-    "jsqr": "^1.4.0",
     "libsodium-wrappers": "^0.7.15",
     "pako": "^2.1.0",
-    "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zustand": "^5.0.3"
@@ -26,7 +24,6 @@
     "@playwright/test": "^1.62.1",
     "@types/node": "^22.10.0",
     "@types/pako": "^2.0.3",
-    "@types/qrcode": "^1.5.5",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vercel/node": "^5.9.9",

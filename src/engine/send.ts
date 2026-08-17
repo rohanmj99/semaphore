@@ -1,7 +1,7 @@
 import { advertiseSender, pairingSupported } from "@core/pairing";
 import { advertiseOnline, type OnlineSender } from "@core/online";
 import { StreamSender } from "@core/session";
-import { FountainSender, FOUNTAIN_PASSES, FOUNTAIN_SYMBOL_BYTES } from "@core/qr/fountain";
+import { FountainSender, FOUNTAIN_SYMBOL_BYTES } from "@core/qr/fountain";
 import { advertiseLight, lightSupported, type LightSenderQueue, type LightTransport } from "@core/qr/light";
 import { advertiseSound, soundSupport, type SoundSenderQueue } from "@core/modem/sound";
 import type { SliceSource } from "@core/chunker";
@@ -228,7 +228,10 @@ export class SendController {
     if (this.channel === "light") {
       this.stream = new FountainSender(this.sessionId, sessionKey, this.source, {
         symbolSize: FOUNTAIN_SYMBOL_BYTES,
-        maxPasses: FOUNTAIN_PASSES,
+        // 0 passes = keep cycling forever: the light channel has no return
+        // path, so the sender keeps repeating symbols until the user cancels
+        // and the receiver catches whatever it missed on the next pass.
+        maxPasses: 0,
         onHeader: (h) => {
           this.completedHash = h.crc32.toString(16).padStart(8, "0");
         },

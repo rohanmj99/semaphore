@@ -9,23 +9,21 @@ import {
   LightTransport,
   startCameraDecoder,
   fragmentLight,
-  paintQr,
-  renderQr,
-  decodeQr,
 } from "./light.ts";
+import { decodeJab, encodeJab, paintJab } from "./jab.ts";
 
 function imageOf(payload: Uint8Array, scale = 8) {
-  const m = renderQr(payload);
-  return { matrix: m, img: paintQr(m, scale) };
+  const m = encodeJab(payload);
+  return { matrix: m, img: paintJab(m, scale) };
 }
 
 function roundTrip(payload: Uint8Array, scale = 8): Uint8Array | null {
   const { img } = imageOf(payload, scale);
-  return decodeQr(img.rgba, img.width, img.height);
+  return decodeJab(img.rgba, img.width, img.height);
 }
 
 describe("light codec", () => {
-  it("fragments a wire message into QR payloads", () => {
+  it("fragments a wire message into JAB payloads", () => {
     const frame = frameMessage(new TextEncoder().encode(JSON.stringify({ t: "go", sid: "b".repeat(16) })));
     const frags = fragmentLight(frame);
     expect(frags.length).toBeGreaterThan(0);
@@ -41,7 +39,7 @@ describe("light codec", () => {
     expect(delivered).toEqual([frame]);
   });
 
-  it("fragments a large message across multiple QRs", () => {
+  it("fragments a large message across multiple JABs", () => {
     const big = new Uint8Array(9000);
     for (let i = 0; i < big.length; i++) big[i] = (i * 7) & 0xff;
     const frags = fragmentLight(big);
@@ -87,8 +85,8 @@ describe("light codec", () => {
   });
 });
 
-describe("qr render + decode", () => {
-  it("round-trips a payload through render → paint → jsQR", () => {
+describe("jab render + decode", () => {
+  it("round-trips a payload through encode → paint → decode", () => {
     const payload = new Uint8Array(300);
     for (let i = 0; i < payload.length; i++) payload[i] = (i * 13 + 7) & 0xff;
     const got = roundTrip(payload);
@@ -108,21 +106,7 @@ describe("qr render + decode", () => {
     const payload = new TextEncoder().encode("semaphore light channel");
     const { img } = imageOf(payload, 4);
     expect(img.width).toBe(img.height);
-    expect(decodeQr(img.rgba, img.width, img.height)).toEqual(payload);
-  });
-
-  it("stays decodable with the custom design (ink/paper/rounded)", () => {
-    const payload = new TextEncoder().encode("semaphore branded qr");
-    const m = renderQr(payload);
-    const img = paintQr(m, 8, 4, { ink: [23, 20, 36], paper: [248, 246, 240], round: 0.42 });
-    expect(decodeQr(img.rgba, img.width, img.height)).toEqual(payload);
-  });
-
-  it("clamps the design rounding to a decodable range", () => {
-    const payload = new TextEncoder().encode("round me");
-    const m = renderQr(payload);
-    const img = paintQr(m, 8, 4, { round: 9 });
-    expect(decodeQr(img.rgba, img.width, img.height)).toEqual(payload);
+    expect(decodeJab(img.rgba, img.width, img.height)).toEqual(payload);
   });
 });
 

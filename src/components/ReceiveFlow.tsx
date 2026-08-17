@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useApp, type ReceivedFile } from "../store.ts";
 import { nearbyMatcher, ReceiveController, ensureStorageFits } from "../engine/receive.ts";
 import { wakeLock } from "../engine/wakelock.ts";
@@ -10,6 +10,7 @@ import {
   type CameraFacing,
   type LightScanHandle,
 } from "@core/qr/light";
+import type { ProgressStats } from "@core/types";
 import { fmtBytes, fmtDuration } from "@core/util";
 import { ProgressRing } from "./ProgressRing.tsx";
 import { QrCard } from "./QrCard.tsx";
@@ -99,6 +100,107 @@ function CameraBox({
   );
 }
 
+type TransferChannel = "loopback" | "online" | "sound" | "light" | null;
+
+/** Transfer progress screen. Defined at module scope: a component defined
+ *  inside the parent's body is recreated on every parent render (stats update
+ *  every ~250 ms), which remounts its whole subtree — including the camera
+ *  preview div and the imperatively-inserted video element — leaving the
+ *  camera black. A top-level component plus a stable callback ref keeps the
+ *  preview box alive across stats updates. */
+function TransferScreen({
+  stats,
+  channel,
+  seen,
+  facing,
+  note,
+  previewRef,
+  onSwitchCam,
+  onCancel,
+}: {
+  stats: ProgressStats | null;
+  channel: TransferChannel;
+  seen: boolean;
+  facing: CameraFacing | null;
+  note: string | null | undefined;
+  previewRef: React.Ref<HTMLDivElement>;
+  onSwitchCam: () => void;
+  onCancel: () => void;
+}) {
+  const total = stats?.totalBytes ?? 1;
+  const got = stats?.transferredBytes ?? 0;
+  const value = total > 0 ? Math.min(1, got / total) : 0;
+  const percent = Math.round(value * 100);
+  const phase = stats?.phase ? PHASE_LABEL[stats.phase] ?? "Receiving" : "Connecting";
+  return (
+    <>
+      <ProgressRing value={value}>
+        <div>
+          <div className="livenumber">{percent}%</div>
+          <div className="livelabel">{phase}</div>
+        </div>
+      </ProgressRing>
+      <div className="filecard card">
+        <IconFile />
+        <div className="meta">
+          <div className="name">Receiving a file</div>
+          <div className="hint">{stats ? `${fmtBytes(stats.transferredBytes)} / ${fmtBytes(stats.totalBytes)}` : "Connecting…"}</div>
+        </div>
+      </div>
+      {channel === "light" && (
+        <>
+          <CameraBox
+            previewRef={previewRef}
+            status={{ seen, facing }}
+            onSwitch={onSwitchCam}
+          />
+          <p className={`hint ${seen ? "" : "warn"}`} role={seen ? undefined : "alert"}>
+            {seen
+              ? "Keep the phones facing each other — the QR is being read."
+              : "No QR seen — point the camera back at the sending screen. The sender repeats everything until you catch it."}
+          </p>
+        </>
+      )}
+      {channel === "sound" && (
+        <p className="hint">Keep the phones close until it finishes.</p>
+      )}
+      <div className="statgrid">
+        <div className="statcell">
+          <span className="label">Speed</span>
+          <span className="value">{stats ? `${Math.round(stats.kbps)} kb/s` : "—"}</span>
+        </div>
+        <div className="statcell">
+          <span className="label">Left</span>
+          <span className="value">{stats?.etaMs != null ? fmtDuration(stats.etaMs) : "—"}</span>
+        </div>
+        <div className="statcell">
+          <span className="label">Errors</span>
+          <span className="value">{stats?.errors ?? 0}</span>
+        </div>
+        <div className="statcell">
+          <span className="label">Chunks</span>
+          <span className="value">
+            {stats ? `${stats.chunksDelivered} / ${stats.totalChunks}` : "—"}
+          </span>
+        </div>
+      </div>
+      {note && (
+        <p className="note" aria-live="polite">
+          {note}
+        </p>
+      )}
+      <div className="spacer" />
+      <button type="button" className="danger" onClick={onCancel}>
+        <IconX />
+        Cancel receiving
+      </button>
+      <p className="visually-hidden" aria-live="polite">
+        {phase}
+      </p>
+    </>
+  );
+}
+
 export function ReceiveFlow() {
   const receiver = useApp((s) => s.receiver);
   const setReceiver = useApp((s) => s.setReceiver);
@@ -119,11 +221,17 @@ export function ReceiveFlow() {
   const [pendingPermission, setPendingPermission] = useState<"mic" | "cam" | null>(null);
   const lightScanRef = useRef<LightScanHandle | null>(null);
   const waitingCamRef = useRef<HTMLDivElement | null>(null);
-  const transferCamRef = useRef<HTMLDivElement | null>(null);
   const [waitingSeen, setWaitingSeen] = useState(false);
   const [waitingFacing, setWaitingFacing] = useState<CameraFacing | null>(null);
   const [transferSeen, setTransferSeen] = useState(false);
   const [transferFacing, setTransferFacing] = useState<CameraFacing | null>(null);
+
+  // Stable identity (no deps) so React only invokes it when the transfer
+  // screen's preview div actually mounts/unmounts — re-attaching the camera
+  // video every time the remounted screen appears.
+  const transferPreviewRef = useCallback((el: HTMLDivElement | null) => {
+    if (el) controllerRef.current?.attachPreview(el);
+  }, []);
 
   const switchCam = async () => {
     const ok = await lightScanRef.current?.switchCamera();
@@ -258,12 +366,16 @@ export function ReceiveFlow() {
   }, [receiver.screen]);
 
   // Light channel: attach the matcher's live camera to the waiting + transfer
-  // screens so the user can aim, and surface a "QR seen" status line.
+  // screens so the user can aim, and surface a "QR seen" status line. The
+  // transfer screen's preview box is recreated on every stats update (see
+  // TransferScreen above), so it attaches through a stable callback ref that
+  // re-attaches on each mount instead of this effect.
   useEffect(() => {
     if (receiver.screen !== "waiting" && receiver.screen !== "transfer") return;
     if (chosenChannel.current !== "light") return;
-    const el = receiver.screen === "waiting" ? waitingCamRef.current : transferCamRef.current;
-    if (el) controllerRef.current?.attachPreview(el);
+    if (receiver.screen === "waiting" && waitingCamRef.current) {
+      controllerRef.current?.attachPreview(waitingCamRef.current);
+    }
     setWaitingFacing(controllerRef.current?.cameraFacing() ?? null);
     setTransferFacing(controllerRef.current?.cameraFacing() ?? null);
     const poll = setInterval(() => {
@@ -573,7 +685,18 @@ export function ReceiveFlow() {
         </>
       )}
 
-      {receiver.screen === "transfer" && <TransferScreen />}
+      {receiver.screen === "transfer" && (
+        <TransferScreen
+          stats={receiver.stats}
+          channel={chosenChannel.current}
+          seen={transferSeen}
+          facing={transferFacing}
+          note={receiver.note}
+          previewRef={transferPreviewRef}
+          onSwitchCam={() => void switchMatchCam()}
+          onCancel={backToListen}
+        />
+      )}
 
       {receiver.screen === "done" && receiver.file && (
         <>
@@ -629,80 +752,4 @@ export function ReceiveFlow() {
       )}
     </div>
   );
-
-  function TransferScreen() {
-    const stats = receiver.stats;
-    const total = stats?.totalBytes ?? 1;
-    const got = stats?.transferredBytes ?? 0;
-    const value = total > 0 ? Math.min(1, got / total) : 0;
-    const percent = Math.round(value * 100);
-    const phase = stats?.phase ? PHASE_LABEL[stats.phase] ?? "Receiving" : "Connecting";
-    return (
-      <>
-        <ProgressRing value={value}>
-          <div>
-            <div className="livenumber">{percent}%</div>
-            <div className="livelabel">{phase}</div>
-          </div>
-        </ProgressRing>
-        <div className="filecard card">
-          <IconFile />
-          <div className="meta">
-            <div className="name">Receiving a file</div>
-            <div className="hint">{stats ? `${fmtBytes(stats.transferredBytes)} / ${fmtBytes(stats.totalBytes)}` : "Connecting…"}</div>
-          </div>
-        </div>
-        {chosenChannel.current === "light" && (
-          <>
-            <CameraBox
-              previewRef={transferCamRef}
-              status={{ seen: transferSeen, facing: transferFacing }}
-              onSwitch={() => void switchMatchCam()}
-            />
-            <p className={`hint ${transferSeen ? "" : "warn"}`} role={transferSeen ? undefined : "alert"}>
-              {transferSeen
-                ? "Keep the phones facing each other — the QR is being read."
-                : "No QR seen — point the camera back at the sending screen. The sender repeats everything until you catch it."}
-            </p>
-          </>
-        )}
-        {chosenChannel.current === "sound" && (
-          <p className="hint">Keep the phones close until it finishes.</p>
-        )}
-        <div className="statgrid">
-          <div className="statcell">
-            <span className="label">Speed</span>
-            <span className="value">{stats ? `${Math.round(stats.kbps)} kb/s` : "—"}</span>
-          </div>
-          <div className="statcell">
-            <span className="label">Left</span>
-            <span className="value">{stats?.etaMs != null ? fmtDuration(stats.etaMs) : "—"}</span>
-          </div>
-          <div className="statcell">
-            <span className="label">Errors</span>
-            <span className="value">{stats?.errors ?? 0}</span>
-          </div>
-          <div className="statcell">
-            <span className="label">Chunks</span>
-            <span className="value">
-              {stats ? `${stats.chunksDelivered} / ${stats.totalChunks}` : "—"}
-            </span>
-          </div>
-        </div>
-        {receiver.note && (
-          <p className="note" aria-live="polite">
-            {receiver.note}
-          </p>
-        )}
-        <div className="spacer" />
-        <button type="button" className="danger" onClick={backToListen}>
-          <IconX />
-          Cancel receiving
-        </button>
-        <p className="visually-hidden" aria-live="polite">
-          {phase}
-        </p>
-      </>
-    );
-  }
 }

@@ -37,7 +37,10 @@ export const FOUNTAIN_SYMBOL_BYTES = 1024;
 export const FOUNTAIN_SYMBOL_CIPHER = FOUNTAIN_SYMBOL_BYTES + 16;
 /** Broadcast passes before the sender stops cycling (symbols are independent,
  *  so a persistent receiver needs just over one pass; a late joiner catches
- *  the rest on the next pass). */
+ *  the rest on the next pass). Pass `maxPasses: 0` to keep cycling forever —
+ *  the app's light channel does this so the flashes keep repeating until the
+ *  user cancels, and the receiver picks up whatever it missed on the next
+ *  pass. */
 export const FOUNTAIN_PASSES = 2;
 /** Encoded symbols per pass — K + overhead so one pass alone usually suffices. */
 export const FOUNTAIN_OVERHEAD_RATIO = 1.2;
@@ -479,7 +482,7 @@ export class FountainSender {
     const helloEvery = 4;
     while (this.state === "sending") {
       if (this.remote) {
-        this.stats.phase = this.passes === 0 ? "running" : "repair";
+        this.stats.phase = this.passes === 0 || maxPasses === 0 ? "running" : "repair";
         this.emit({ type: "phase", phase: this.stats.phase });
         this.remote.send(this.helloFrame(this.builder.header));
         await this.waitIdle();
@@ -504,6 +507,9 @@ export class FountainSender {
       this.stats.passes = this.passes;
       this.stats.phase = "repair";
       this.emit({ type: "stats", stats: this.stats.snapshot() });
+      // Let macrotasks run between passes even when the transport paces
+      // instantly (tests), so a maxPasses: 0 broadcast stays cooperative.
+      await new Promise((resolve) => setTimeout(resolve, 0));
       if (maxPasses > 0 && this.passes >= maxPasses) return;
     }
   }

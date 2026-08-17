@@ -4,8 +4,9 @@ import { SendController, type SendChannel } from "../engine/send.ts";
 import { wakeLock } from "../engine/wakelock.ts";
 import { fileSource } from "@core/chunker";
 import { pairingSupported } from "@core/pairing";
-import { lightSupported } from "@core/qr/light";
+import { lightSupported, type LightTransport } from "@core/qr/light";
 import { soundSupport } from "@core/modem/sound";
+import type { ProgressStats } from "@core/types";
 import { fmtBytes, fmtDuration } from "@core/util";
 import { ProgressRing } from "./ProgressRing.tsx";
 import { QrCard } from "./QrCard.tsx";
@@ -63,7 +64,7 @@ function FrameRateSlider({ frameMs, onChange }: { frameMs: number; onChange: (ms
   return (
     <label className="framerate">
       <span className="framerate-label">
-        QR speed <strong>{fps} fps</strong>
+        Flash speed <strong>{fps} fps</strong>
       </span>
       <input
         type="range"
@@ -82,6 +83,101 @@ function FrameRateSlider({ frameMs, onChange }: { frameMs: number; onChange: (ms
             : "A good balance of speed and reliability."}
       </span>
     </label>
+  );
+}
+
+/** Sender progress screen. Module-scope like the receiver's: a nested
+ *  component would be remounted on every stats update, flickering the
+ *  animated flash and the progress ring. */
+function TransferScreen({
+  stats,
+  channel,
+  frameMs,
+  note,
+  display,
+  fileName,
+  fileSize,
+  onFrameMs,
+  onCancel,
+}: {
+  stats: ProgressStats | null;
+  channel: SendChannel;
+  frameMs: number | null | undefined;
+  note: string | null | undefined;
+  display: LightTransport | null;
+  fileName: string;
+  fileSize: number;
+  onFrameMs: (ms: number) => void;
+  onCancel: () => void;
+}) {
+  const total = stats?.totalBytes ?? 1;
+  const sent = stats?.transferredBytes ?? 0;
+  const value = total > 0 ? Math.min(1, sent / total) : 0;
+  const percent = Math.round(value * 100);
+  const phase = stats?.phase ? PHASE_LABEL[stats.phase] ?? "Sending" : "Connecting";
+  return (
+    <>
+      {channel === "light" && display && (
+        <div className="qrcard-wrap">
+          <QrCard transport={display} frameMs={frameMs ?? undefined} />
+        </div>
+      )}
+      {channel === "light" && (
+        <>
+          <FrameRateSlider frameMs={frameMs ?? 100} onChange={onFrameMs} />
+          <p className="hint">
+            The flashes keep repeating until you cancel — the other phone picks up whatever
+            it missed on the next pass.
+          </p>
+        </>
+      )}
+      <ProgressRing value={value}>
+        <div>
+          <div className="livenumber">{percent}%</div>
+          <div className="livelabel">{phase}</div>
+        </div>
+      </ProgressRing>
+      <div className="filecard card">
+        <IconFile />
+        <div className="meta">
+          <div className="name">{fileName}</div>
+          <div className="hint">{fmtBytes(fileSize)}</div>
+        </div>
+      </div>
+      <div className="statgrid">
+        <div className="statcell">
+          <span className="label">Speed</span>
+          <span className="value">{stats ? `${Math.round(stats.kbps)} kb/s` : "—"}</span>
+        </div>
+        <div className="statcell">
+          <span className="label">Left</span>
+          <span className="value">{stats?.etaMs != null ? fmtDuration(stats.etaMs) : "—"}</span>
+        </div>
+        <div className="statcell">
+          <span className="label">Chunks</span>
+          <span className="value">
+            {stats ? `${stats.chunksDelivered} / ${stats.totalChunks}` : "—"}
+          </span>
+        </div>
+        <div className="statcell">
+          <span className="label">Errors</span>
+          <span className="value">{stats?.errors ?? 0}</span>
+        </div>
+      </div>
+      {note && (
+        <p className="note" aria-live="polite">
+          {note}
+        </p>
+      )}
+      <div className="spacer" />
+      <button type="button" className="danger" onClick={onCancel}>
+        <IconX />
+        Cancel sending
+      </button>
+      <p className="visually-hidden" aria-live="polite">
+        {phase}
+      </p>
+    </>
   );
 }
 
@@ -368,7 +464,22 @@ export function SendFlow() {
         </>
       )}
 
-      {sender.screen === "transfer" && <TransferScreen />}
+      {sender.screen === "transfer" && (
+        <TransferScreen
+          stats={sender.stats}
+          channel={sender.channel ?? "light"}
+          frameMs={sender.frameMs}
+          note={sender.note}
+          display={controllerRef.current?.display ?? null}
+          fileName={sender.fileName}
+          fileSize={sender.fileSize}
+          onFrameMs={(ms) => {
+            setSender({ frameMs: ms });
+            controllerRef.current?.setFrameMs(ms);
+          }}
+          onCancel={backToLanding}
+        />
+      )}
 
       {sender.screen === "done" && (
         <>
@@ -455,77 +566,4 @@ export function SendFlow() {
       )}
     </div>
   );
-
-  function TransferScreen() {
-    const stats = sender.stats;
-    const total = stats?.totalBytes ?? 1;
-    const sent = stats?.transferredBytes ?? 0;
-    const value = total > 0 ? Math.min(1, sent / total) : 0;
-    const percent = Math.round(value * 100);
-    const phase = stats?.phase ? PHASE_LABEL[stats.phase] ?? "Sending" : "Connecting";
-    return (
-      <>
-        {sender.channel === "light" && controllerRef.current?.display && (
-          <div className="qrcard-wrap">
-            <QrCard transport={controllerRef.current.display} frameMs={sender.frameMs} />
-          </div>
-        )}
-        {sender.channel === "light" && (
-          <FrameRateSlider
-            frameMs={sender.frameMs ?? 100}
-            onChange={(ms) => {
-              setSender({ frameMs: ms });
-              controllerRef.current?.setFrameMs(ms);
-            }}
-          />
-        )}
-        <ProgressRing value={value}>
-          <div>
-            <div className="livenumber">{percent}%</div>
-            <div className="livelabel">{phase}</div>
-          </div>
-        </ProgressRing>
-        <div className="filecard card">
-          <IconFile />
-          <div className="meta">
-            <div className="name">{sender.fileName}</div>
-            <div className="hint">{fmtBytes(sender.fileSize)}</div>
-          </div>
-        </div>
-        <div className="statgrid">
-          <div className="statcell">
-            <span className="label">Speed</span>
-            <span className="value">{stats ? `${Math.round(stats.kbps)} kb/s` : "—"}</span>
-          </div>
-          <div className="statcell">
-            <span className="label">Left</span>
-            <span className="value">{stats?.etaMs != null ? fmtDuration(stats.etaMs) : "—"}</span>
-          </div>
-          <div className="statcell">
-            <span className="label">Chunks</span>
-            <span className="value">
-              {stats ? `${stats.chunksDelivered} / ${stats.totalChunks}` : "—"}
-            </span>
-          </div>
-          <div className="statcell">
-            <span className="label">Errors</span>
-            <span className="value">{stats?.errors ?? 0}</span>
-          </div>
-        </div>
-        {sender.note && (
-          <p className="note" aria-live="polite">
-            {sender.note}
-          </p>
-        )}
-        <div className="spacer" />
-        <button type="button" className="danger" onClick={backToLanding}>
-          <IconX />
-          Cancel sending
-        </button>
-        <p className="visually-hidden" aria-live="polite">
-          {phase}
-        </p>
-      </>
-    );
-  }
 }

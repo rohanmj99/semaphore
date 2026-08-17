@@ -14,7 +14,7 @@ import {
   type SymbolEndpoint,
 } from "./fountain.ts";
 import { arraySource } from "../chunker.ts";
-import { paintQr, renderQr } from "./light.ts";
+import { encodeJab, paintJab } from "./jab.ts";
 
 function randomBytes(n: number, seed: number): Uint8Array {
   const out = new Uint8Array(n);
@@ -114,7 +114,7 @@ describe("fountain wire format", () => {
     expect(() => fountainSymbol(1, 0, tooBig)).toThrow();
   });
 
-  it("fits a 1 KB sealed symbol inside one QR payload", () => {
+  it("fits a 1 KB sealed symbol inside one JAB payload", () => {
     const wire = fountainSymbol(1024, 0, randomBytes(FOUNTAIN_SYMBOL_CIPHER, 5));
     expect(wire.length).toBeLessThanOrEqual(1400);
   });
@@ -223,6 +223,34 @@ describe("fountain session transfer", () => {
     expect(result.ok).toBe(true);
     expect(result.data).toEqual(original);
   });
+
+  it("cycles symbols indefinitely with maxPasses 0 until cancelled", async () => {
+    const original = randomBytes(50_000, 77);
+    const key = randomBytes(32, 8);
+    const tx = new FakeLight();
+    const rx = new FakeLight();
+    tx.connect(rx, 0);
+    let symbols = 0;
+    rx.onSymbol(() => symbols++);
+    const events: string[] = [];
+    const sender = new FountainSender("sess-4", key, arraySource(original, "cycle.bin"), {
+      maxPasses: 0,
+      onEvent: (e) => events.push(e.type),
+    });
+    const receiver = new FountainReceiver("sess-4", key);
+    receiver.start(rx);
+    sender.run(tx);
+    await new Promise((r) => setTimeout(r, 80));
+    const k = Math.ceil(original.length / 1024);
+    const pool = Math.ceil(k * 1.2);
+    // Past the first pass and still broadcasting — the flashes never stop on
+    // their own, so a receiver that started late can always catch up.
+    expect(symbols).toBeGreaterThan(pool);
+    expect(events).not.toContain("done");
+    sender.cancel();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(events).not.toContain("done");
+  });
 });
 
 describe("light transport symbols + pacing", () => {
@@ -240,8 +268,8 @@ describe("light transport symbols + pacing", () => {
     const wire = fountainSymbol(16, 3, randomBytes(300, 8));
     const got: Array<{ k: number; id: number }> = [];
     const unsub = rx.onSymbol((s) => got.push({ k: s.k, id: s.id }));
-    const m = renderQr(wire);
-    const img = paintQr(m, 6);
+    const m = encodeJab(wire);
+    const img = paintJab(m, 6);
     rx.feedImage(img.rgba, img.width, img.height);
     expect(got).toEqual([{ k: 16, id: 3 }]);
     unsub();
@@ -253,8 +281,8 @@ describe("light transport symbols + pacing", () => {
     const delivered: Uint8Array[] = [];
     rx.onMessage((f) => delivered.push(f));
     const wire = fountainSymbol(4, 1, randomBytes(100, 6));
-    const m = renderQr(wire);
-    const img = paintQr(m, 6);
+    const m = encodeJab(wire);
+    const img = paintJab(m, 6);
     rx.feedImage(img.rgba, img.width, img.height);
     expect(delivered).toEqual([]);
     rx.close();

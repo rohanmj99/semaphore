@@ -1,26 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { frameMessage, parseMessage } from "../frames.ts";
-import {
-  advertiseLight,
-  fragmentLight,
-  LightTransport,
-  matchLightSession,
-  paintQr,
-  renderQr,
-} from "./light.ts";
+import { advertiseLight, fragmentLight, LightTransport, matchLightSession } from "./light.ts";
+import { encodeJab, paintJab } from "./jab.ts";
 import { deriveKxSessionKey, keypair } from "../crypto.ts";
 import { fromBase64Url, toBase64Url } from "../util.ts";
 import { encodeHeaderWire, ManifestBuilder } from "../chunker.ts";
 import { StreamReceiver } from "../session.ts";
 
 function feedFrag(t: LightTransport, frag: Uint8Array) {
-  const m = renderQr(frag);
-  const img = paintQr(m, 8);
+  const m = encodeJab(frag);
+  const img = paintJab(m, 8);
   t.feedImage(new Uint8ClampedArray(img.rgba), img.width, img.height);
 }
 
 /** Full light-channel pipeline with real keys: match → go → hello → chunks,
- *  all round-tripped through the camera transport (QR paint → decode). This
+ *  all round-tripped through the camera transport (JAB paint → decode). This
  *  is the regression test for the transport contract: light delivers frames
  *  unwrapped, and StreamReceiver must accept them without re-parsing. */
 describe("light receive pipeline", () => {
