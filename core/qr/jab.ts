@@ -658,12 +658,26 @@ export function decodeJab(
 
   // Grid size from the bounding box — must be one of the supported sizes.
   // The stripe runs give the module size in pixels; at fractional scales the
-  // measured runs round to whole pixels (±~1 px), so compare the bbox's
-  // implied scale (bbox/n) against the measured one instead of demanding
-  // bbox/scale to be an exact integer.
-  const n = Math.round(bw / scaleX);
-  if (Math.abs(bw / n - scaleX) > 1.25 || Math.abs(bh / n - scaleY) > 1.25) return null;
-  if (!JAB_SIDES.includes((n - 14) as (typeof JAB_SIDES)[number])) return null;
+  // measured runs round to whole pixels (±~1 px), so the run-derived scale
+  // cannot be rounded into a grid size directly — instead every supported
+  // size is tested against both axes' implied scale (bbox/n).
+  const n = (() => {
+    let best = 0;
+    let bestErr = Infinity;
+    for (const side of JAB_SIDES) {
+      const cand = side + 14;
+      const ex = Math.abs(bw / cand - scaleX);
+      const ey = Math.abs(bh / cand - scaleY);
+      if (ex > 1.0 || ey > 1.0) continue;
+      const err = ex + ey;
+      if (err < bestErr) {
+        bestErr = err;
+        best = cand;
+      }
+    }
+    return best;
+  })();
+  if (n === 0) return null;
   // Sample with the bbox-implied module size: the measured runs round to
   // whole pixels and would drift across the grid at fractional scales.
   scaleX = bw / n;

@@ -154,6 +154,25 @@ describe("jab codec", () => {
     expect(decodeJab(squashed.rgba, squashed.w, squashed.h)).toEqual(payload);
   });
 
+  it("decodes a code resized by a fractional factor (measured scales round to whole pixels)", () => {
+    // A 16:9 camera frame drawn into a 4:3 decode box lands on fractional
+    // module sizes (e.g. 8.6 px wide, 6.45 px tall); the measured stripe
+    // runs then round to whole pixels, which used to push the grid size
+    // estimate off the supported side set.
+    const payload = dataOf(500, 31);
+    const m = encodeJab(payload);
+    const img = paintJab(m, 8, 4);
+    for (const [sx, sy] of [
+      [1.29, 1.29], // square, fractional scale (480x480 mock in 640x480 decode box is 1.29)
+      [1.72, 1.29], // 4:3 aspect, fractional (372px card stretched to 640x480)
+      [0.75, 1.0],
+    ] as const) {
+      const f = distort(img.rgba, img.width, img.height, sx, sy);
+      const got = decodeJab(f.rgba, f.w, f.h);
+      expect(got, `sx=${sx} sy=${sy}`).toEqual(payload);
+    }
+  });
+
   it("survives camera tint and brightness shifts", () => {
     const payload = dataOf(500, 33);
     const m = encodeJab(payload);
