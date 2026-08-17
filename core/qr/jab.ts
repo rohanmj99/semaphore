@@ -106,7 +106,7 @@ const RS_GEN = (() => {
   return gen;
 })();
 
-export function rsEncodeBlock(data: Uint8Array): Uint8Array {
+function rsEncodeBlock(data: Uint8Array): Uint8Array {
   const parity = new Uint8Array(RS_PARITY);
   for (let i = 0; i < data.length; i++) {
     const factor = data[i] ^ parity[0];
@@ -658,122 +658,125 @@ export function decodeJab(
 
   // Grid size from the bounding box — must be one of the supported sizes.
   // The stripe runs give the module size in pixels; at fractional scales the
-  // measured runs round to whole pixels (±~1 px), so the run-derived scale
-  // cannot be rounded into a grid size directly — instead every supported
-  // size is tested against both axes' implied scale (bbox/n).
-  const n = (() => {
-    let best = 0;
-    let bestErr = Infinity;
-    for (const side of JAB_SIDES) {
-      const cand = side + 14;
-      const ex = Math.abs(bw / cand - scaleX);
-      const ey = Math.abs(bh / cand - scaleY);
-      if (ex > 1.0 || ey > 1.0) continue;
-      const err = ex + ey;
-      if (err < bestErr) {
-        bestErr = err;
-        best = cand;
+  // measured runs round to whole pixels (±~1 px) and bilinear resampling can
+  // bias the measured light runs short by up to ~0.5 px, so the run-derived
+  // scale cannot be rounded into a grid size directly — instead every
+  // supported size is tested against both axes' implied scale (bbox/n).
+  // Several sizes can fit within the 1.0 px tolerance; the decode is tried
+  // with each (best fit first) and the first that validates wins.
+  const nCandidates = JAB_SIDES.map((side) => {
+    const cand = side + 14;
+    const ex = Math.abs(bw / cand - scaleX);
+    const ey = Math.abs(bh / cand - scaleY);
+    return { cand, ex, ey };
+  })
+    .filter((c) => c.ex <= 1.0 && c.ey <= 1.0)
+    .sort((a, b) => a.ex + a.ey - (b.ex + b.ey));
+  if (nCandidates.length === 0) return null;
+  for (const cand of nCandidates) {
+    const out = tryDecode(cand.cand);
+    if (out !== null) return out;
+  }
+  return null;
+
+  function tryDecode(n: number): Uint8Array | null {
+    // Sample with the bbox-implied module size: the measured runs round to
+    // whole pixels and would drift across the grid at fractional scales.
+    const sx = bw / n;
+    const sy = bh / n;
+
+    // Quiet zone must be white — rejects dark backgrounds.
+    const quiet = bandMean(rgba, w, h, left, top, right, bottom, true);
+    if (quiet[0] < 170 || quiet[1] < 170 || quiet[2] < 170) return null;
+
+    // Black reference from the top border row (all black); white from the
+    // quiet zone — both invariant to arm stripes and data content.
+    const bcy = top + Math.floor(sy / 2);
+    let blkR = 0;
+    let blkG = 0;
+    let blkB = 0;
+    let bcount = 0;
+    for (let x = left; x <= right; x++) {
+      const i = (bcy * w + x) * 4;
+      blkR += rgba[i];
+      blkG += rgba[i + 1];
+      blkB += rgba[i + 2];
+      bcount++;
+    }
+    const black: [number, number, number] = [blkR / bcount, blkG / bcount, blkB / bcount];
+
+    // Sample and classify every module.
+    const colors = new Uint8Array(n * n);
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        const [r, g, b] = sampleModule(rgba, w, h, left, top, sx, sy, x, y);
+        colors[y * n + x] = classify(r, g, b, black, quiet);
       }
     }
-    return best;
-  })();
-  if (n === 0) return null;
-  // Sample with the bbox-implied module size: the measured runs round to
-  // whole pixels and would drift across the grid at fractional scales.
-  scaleX = bw / n;
-  scaleY = bh / n;
 
-  // Quiet zone must be white — rejects dark backgrounds.
-  const quiet = bandMean(rgba, w, h, left, top, right, bottom, true);
-  if (quiet[0] < 170 || quiet[1] < 170 || quiet[2] < 170) return null;
-
-  // Black reference from the top border row (all black); white from the
-  // quiet zone — both invariant to arm stripes and data content.
-  const bcy = top + Math.floor(scaleY / 2);
-  let blkR = 0;
-  let blkG = 0;
-  let blkB = 0;
-  let bcount = 0;
-  for (let x = left; x <= right; x++) {
-    const i = (bcy * w + x) * 4;
-    blkR += rgba[i];
-    blkG += rgba[i + 1];
-    blkB += rgba[i + 2];
-    bcount++;
-  }
-  const black: [number, number, number] = [blkR / bcount, blkG / bcount, blkB / bcount];
-
-  // Sample and classify every module.
-  const colors = new Uint8Array(n * n);
-  for (let y = 0; y < n; y++) {
-    for (let x = 0; x < n; x++) {
-      const [r, g, b] = sampleModule(rgba, w, h, left, top, scaleX, scaleY, x, y);
-      colors[y * n + x] = classify(r, g, b, black, quiet);
+    // Orientation: the only structurally unique corner is the solid black
+    // marker (36 black, 0 white) — the L-locator and the two arm corners all
+    // carry the same band pattern (26 black, 10 white). The marker must be
+    // both the darkest and the least white corner; its diagonal opposite is
+    // the L-locator. Marker at bottom-right = unrotated, at top-left = 180°.
+    const tl = cornerStats(colors, n, 0, 0);
+    const tr = cornerStats(colors, n, n - 6, 0);
+    const bl = cornerStats(colors, n, 0, n - 6);
+    const br = cornerStats(colors, n, n - 6, n - 6);
+    const corners = [
+      { at: "tl", black: tl.black, white: tl.nonBlack },
+      { at: "tr", black: tr.black, white: tr.nonBlack },
+      { at: "bl", black: bl.black, white: bl.nonBlack },
+      { at: "br", black: br.black, white: br.nonBlack },
+    ] as const;
+    let marker: { at: "tl" | "tr" | "bl" | "br"; black: number; white: number } = corners[0];
+    for (const c of corners) {
+      if (c.black > marker.black || (c.black === marker.black && c.white < marker.white)) marker = c;
     }
-  }
+    if (marker.black < 30 || marker.white > 5) return null;
+    // The marker corner must agree with the arm-side detection.
+    if (rotated && marker.at !== "tl") return null;
+    if (!rotated && marker.at !== "br") return null;
 
-  // Orientation: the only structurally unique corner is the solid black
-  // marker (36 black, 0 white) — the L-locator and the two arm corners all
-  // carry the same band pattern (26 black, 10 white). The marker must be
-  // both the darkest and the least white corner; its diagonal opposite is
-  // the L-locator. Marker at bottom-right = unrotated, at top-left = 180°.
-  const tl = cornerStats(colors, n, 0, 0);
-  const tr = cornerStats(colors, n, n - 6, 0);
-  const bl = cornerStats(colors, n, 0, n - 6);
-  const br = cornerStats(colors, n, n - 6, n - 6);
-  const corners = [
-    { at: "tl", black: tl.black, white: tl.nonBlack },
-    { at: "tr", black: tr.black, white: tr.nonBlack },
-    { at: "bl", black: bl.black, white: bl.nonBlack },
-    { at: "br", black: br.black, white: br.nonBlack },
-  ] as const;
-  let marker: { at: "tl" | "tr" | "bl" | "br"; black: number; white: number } = corners[0];
-  for (const c of corners) {
-    if (c.black > marker.black || (c.black === marker.black && c.white < marker.white)) marker = c;
-  }
-  if (marker.black < 30 || marker.white > 5) return null;
-  // The marker corner must agree with the arm-side detection.
-  if (rotated && marker.at !== "tl") return null;
-  if (!rotated && marker.at !== "br") return null;
-
-  // Read the data modules (physical coordinates, unmasked) into a bitstream.
-  const { side, blocksMax } = gridCapacity(n);
-  const stream = new Uint8Array(blocksMax * RS_LEN);
-  let bit = 0;
-  for (let dy = 0; dy < side; dy++) {
-    for (let dx = 0; dx < side; dx++) {
-      let px: number;
-      let py: number;
-      if (rotated) {
-        px = n - 1 - (dx + JAB_BANDS + 1);
-        py = n - 1 - (dy + JAB_BANDS + 1);
-      } else {
-        px = dx + JAB_BANDS + 1;
-        py = dy + JAB_BANDS + 1;
+    // Read the data modules (physical coordinates, unmasked) into a bitstream.
+    const { side, blocksMax } = gridCapacity(n);
+    const stream = new Uint8Array(blocksMax * RS_LEN);
+    let bit = 0;
+    for (let dy = 0; dy < side; dy++) {
+      for (let dx = 0; dx < side; dx++) {
+        let px: number;
+        let py: number;
+        if (rotated) {
+          px = n - 1 - (dx + JAB_BANDS + 1);
+          py = n - 1 - (dy + JAB_BANDS + 1);
+        } else {
+          px = dx + JAB_BANDS + 1;
+          py = dy + JAB_BANDS + 1;
+        }
+        // The mask is defined on the code's own coordinates, so a rotated
+        // image must unmask with the position the module had before rotation.
+        const mx = rotated ? n - 1 - px : px;
+        const my = rotated ? n - 1 - py : py;
+        const idx = (colors[py * n + px] & 7) ^ maskFor(n, mx, my);
+        for (let k = 0; k < 3; k++) {
+          const b = bit + k;
+          if ((idx >> (2 - k)) & 1) stream[b >> 3] |= 1 << (7 - (b & 7));
+        }
+        bit += 3;
       }
-      // The mask is defined on the code's own coordinates, so a rotated
-      // image must unmask with the position the module had before rotation.
-      const mx = rotated ? n - 1 - px : px;
-      const my = rotated ? n - 1 - py : py;
-      const idx = (colors[py * n + px] & 7) ^ maskFor(n, mx, my);
-      for (let k = 0; k < 3; k++) {
-        const b = bit + k;
-        if ((idx >> (2 - k)) & 1) stream[b >> 3] |= 1 << (7 - (b & 7));
-      }
-      bit += 3;
     }
-  }
 
-  // RS-decode every block, then strip the length header.
-  const dataOut = new Uint8Array(blocksMax * RS_DATA);
-  for (let b = 0; b < blocksMax; b++) {
-    const block = rsDecodeBlock(stream.subarray(b * RS_LEN, (b + 1) * RS_LEN));
-    if (!block) return null;
-    dataOut.set(block, b * RS_DATA);
+    // RS-decode every block, then strip the length header.
+    const dataOut = new Uint8Array(blocksMax * RS_DATA);
+    for (let b = 0; b < blocksMax; b++) {
+      const block = rsDecodeBlock(stream.subarray(b * RS_LEN, (b + 1) * RS_LEN));
+      if (!block) return null;
+      dataOut.set(block, b * RS_DATA);
+    }
+    const len = (dataOut[0] << 8) | dataOut[1];
+    const cap = blocksMax * RS_DATA - 2;
+    if (len < 1 || len > cap) return null;
+    return dataOut.slice(2, 2 + len);
   }
-  const len = (dataOut[0] << 8) | dataOut[1];
-  const cap = blocksMax * RS_DATA - 2;
-  if (len < 1 || len > cap) return null;
-  return dataOut.slice(2, 2 + len);
 }
 

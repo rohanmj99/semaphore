@@ -253,3 +253,8 @@ Update this file at the end of every working session. Dates below are session da
 - Gate unfinished channels with "coming soon", never fake progress.
 - Design: ink #111 / paper #FAFAF7 / accent #E8590C, system-ui, ≥48px targets, line icons, no emoji, aria-live, prefers-reduced-motion.
 - Wire format/encryption is E2E on every payload; mailbox never carries bytes.
+## 2026-08-18
+- Shipped JAB side-selection fix (61ec29b): n derived by iterating all JAB_SIDES, |bw/n - scaleX| <= 1.0 AND |bh/n - scaleY| <= 1.0, best total error wins. E2E pairing now passes fully (receiver spots, words match both ways, sender sees match).
+- Transfer stall diagnosed: fountain symbol frames (side 64, n=78, 430px card) fail decodeJab in the live two-stage bilinear pipeline (card->480x480 cam->640x480 decode box). Bilinear blur biases measured light arm runs short (~0.5px): scaleX measured 7.0 vs true 7.44, so candidate n=80 (side 66, wrong) beat the true n=78 on total error -> decode always null.
+- FIX shipped locally (NOT yet committed/deployed): decodeJab now tries ALL candidate grid sizes in error order, returning the first RS-valid decode (jab.ts tryDecode loop). rsEncodeBlock export reverted. New regression test jab-camera-pipeline.test.ts (two-stage bilinear, 1052-byte symbol). 162 tests pass, tsc clean, build clean.
+- NEXT: robocopy -> vercel-deploy, commit+push, verify deploy hash, re-run e2e-light.mjs until step 10 PASS, clean temp diag tests (live-pipe-trace, samples-*, null-geom, symbol-diag) + root strays (samples.json, e2e-out.txt, e2e-light.mjs).
