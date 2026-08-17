@@ -18,13 +18,13 @@ class FakeDataChannel {
   onerror: ((ev?: unknown) => void) | null = null;
   private peer: FakeDataChannel | null = null;
 
-  constructor(label: string) {
+  constructor(label: string, readonly maxMessageSize = Infinity) {
     this.label = label;
   }
 
-  static pair(label: string): [FakeDataChannel, FakeDataChannel] {
-    const a = new FakeDataChannel(label);
-    const b = new FakeDataChannel(label);
+  static pair(label: string, maxMessageSize = Infinity): [FakeDataChannel, FakeDataChannel] {
+    const a = new FakeDataChannel(label, maxMessageSize);
+    const b = new FakeDataChannel(label, maxMessageSize);
     a.peer = b;
     b.peer = a;
     return [a, b];
@@ -32,6 +32,9 @@ class FakeDataChannel {
 
   send(data: ArrayBuffer | ArrayBufferView): void {
     const view = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    if (view.byteLength > this.maxMessageSize) {
+      throw new Error("message too large");
+    }
     const copy = new Uint8Array(view);
     this.bufferedAmount += copy.byteLength;
     queueMicrotask(() => {
@@ -239,6 +242,25 @@ describe("DataChannelTransport", () => {
     expect(() => ta.send(new Uint8Array(1))).not.toThrow();
     b.drop();
     expect(() => tb.send(new Uint8Array(1))).not.toThrow();
+  });
+
+  it("fragments large frames and reassembles them on the receiving side", async () => {
+    const [a, b] = FakeDataChannel.pair("data", 64 * 1024);
+    const ta = new DataChannelTransport();
+    const tb = new DataChannelTransport();
+    const received: Uint8Array[] = [];
+    tb.onMessage((f) => received.push(f));
+    ta.attach(a);
+    tb.attach(b);
+    a.open();
+    b.open();
+    await new Promise((r) => setTimeout(r, 1));
+    const payload = new Uint8Array(300_000);
+    for (let i = 0; i < payload.length; i++) payload[i] = (i * 31 + 7) & 0xff;
+    ta.send(payload);
+    await new Promise((r) => setTimeout(r, 1));
+    expect(received).toHaveLength(1);
+    expect(received[0]).toEqual(payload);
   });
 });
 

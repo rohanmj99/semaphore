@@ -16,6 +16,11 @@ export interface DataChannelLike {
   onerror: ((ev: RTCErrorEvent) => void) | null;
 }
 
+/** Largest single message an SCTP data channel will carry (Chromium: 256 KiB). */
+const FRAGMENT_MAX = 60 * 1024;
+const FRAG_FIRST = 0xf1;
+const FRAG_NEXT = 0xf2;
+
 export class DataChannelTransport implements TransportEndpoint {
   readonly kind = "online" as const;
   readonly id = nextId();
@@ -28,6 +33,11 @@ export class DataChannelTransport implements TransportEndpoint {
   private closeHandlers = new Set<() => void>();
   private openHandlers = new Set<() => void>();
   private peerCloseHandlers = new Set<() => void>();
+  private fragSeq = 0;
+  private fragments = new Map<
+    number,
+    { total: number; parts: Uint8Array[] }
+  >();
 
   attach(dc: DataChannelLike): void {
     if (this.closed) {
@@ -37,6 +47,7 @@ export class DataChannelTransport implements TransportEndpoint {
     this.dc = dc;
     this.opened = false;
     this.peerClosed = false;
+    this.fragments.clear();
     dc.binaryType = "arraybuffer";
     dc.onmessage = (ev) => {
       const data = ev.data;
@@ -48,7 +59,10 @@ export class DataChannelTransport implements TransportEndpoint {
       } else {
         return;
       }
-      for (const cb of [...this.msgHandlers]) cb(frame);
+      const assembled = this.accept(frame);
+      if (assembled) {
+        for (const cb of [...this.msgHandlers]) cb(assembled);
+      }
     };
     dc.onerror = () => {};
     dc.onclose = () => {
@@ -64,11 +78,66 @@ export class DataChannelTransport implements TransportEndpoint {
 
   send(frame: Uint8Array): void {
     if (this.closed) throw new Error("channel closed");
-    if (!this.dc || this.dc.readyState !== "open") {
-      this.queue.push(frame);
+    // SCTP data channels cap each message (Chromium: 256 KiB), so chunk
+    // frames must be split and reassembled on the receiving side.
+    if (frame.length <= FRAGMENT_MAX) {
+      if (!this.dc || this.dc.readyState !== "open") {
+        this.queue.push(frame);
+        return;
+      }
+      this.transmit(frame);
       return;
     }
-    this.transmit(frame);
+    const id = ++this.fragSeq & 0xffff;
+    const total = Math.ceil(frame.length / FRAGMENT_MAX);
+    for (let i = 0; i < total; i++) {
+      const start = i * FRAGMENT_MAX;
+      const slice = frame.subarray(start, Math.min(start + FRAGMENT_MAX, frame.length));
+      const header = new Uint8Array(4);
+      header[0] = i === 0 ? FRAG_FIRST : FRAG_NEXT;
+      header[1] = (id >> 8) & 0xff;
+      header[2] = id & 0xff;
+      header[3] = i === 0 ? total : i;
+      const part = new Uint8Array(4 + slice.length);
+      part.set(header);
+      part.set(slice, 4);
+      if (!this.dc || this.dc.readyState !== "open") {
+        this.queue.push(part);
+        continue;
+      }
+      this.transmit(part);
+    }
+  }
+
+  /** Reassemble fragment parts; returns a complete frame or null. */
+  private accept(packet: Uint8Array): Uint8Array | null {
+    if (packet.length < 1) return null;
+    if (packet[0] !== FRAG_FIRST && packet[0] !== FRAG_NEXT) return packet;
+    if (packet.length < 4) return null;
+    const id = (packet[1] << 8) | packet[2];
+    const payload = packet.subarray(4);
+    const entry = this.fragments.get(id);
+    if (packet[0] === FRAG_FIRST) {
+      const total = packet[3];
+      if (total < 1 || total > 4096) return null;
+      this.fragments.set(id, { total, parts: [payload] });
+      return null;
+    }
+    if (!entry) return null;
+    const index = packet[3];
+    if (index < 1 || index >= entry.total) return null;
+    entry.parts[index] = payload;
+    if (entry.parts.length < entry.total) return null;
+    this.fragments.delete(id);
+    let length = 0;
+    for (const part of entry.parts) length += part.length;
+    const frame = new Uint8Array(length);
+    let offset = 0;
+    for (const part of entry.parts) {
+      frame.set(part, offset);
+      offset += part.length;
+    }
+    return frame;
   }
 
   onMessage(cb: (frame: Uint8Array) => void): () => void {
