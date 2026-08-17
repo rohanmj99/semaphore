@@ -228,10 +228,10 @@ export class SendController {
     if (this.channel === "light") {
       this.stream = new FountainSender(this.sessionId, sessionKey, this.source, {
         symbolSize: FOUNTAIN_SYMBOL_BYTES,
-        // 0 passes = keep cycling forever: the light channel has no return
-        // path, so the sender keeps repeating symbols until the user cancels
-        // and the receiver catches whatever it missed on the next pass.
-        maxPasses: 0,
+        // Like sound, light is a one-way broadcast with no return path: a
+        // finite number of passes lets every receiver catch the symbols it
+        // missed, then the sender finishes so the UI can show "Sent".
+        maxPasses: NO_ACK_PASSES,
         onHeader: (h) => {
           this.completedHash = h.crc32.toString(16).padStart(8, "0");
         },
