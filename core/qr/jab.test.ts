@@ -17,6 +17,33 @@ function roundTrip(payload: Uint8Array, scale: number): Uint8Array | null {
   return decodeJab(img.rgba, img.width, img.height);
 }
 
+/** Non-uniform scale — simulates a 16:9 camera drawn into a 4:3 box. */
+function distort(rgba: Uint8ClampedArray, w: number, h: number, sx: number, sy: number): { rgba: Uint8ClampedArray; w: number; h: number } {
+  const W = Math.max(60, Math.floor(w * sx));
+  const H = Math.max(60, Math.floor(h * sy));
+  const out = new Uint8ClampedArray(W * H * 4);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const sx0 = Math.floor(x / sx);
+      const sy0 = Math.floor(y / sy);
+      const dst = (y * W + x) * 4;
+      if (sx0 >= w || sy0 >= h) {
+        out[dst] = 255;
+        out[dst + 1] = 255;
+        out[dst + 2] = 255;
+        out[dst + 3] = 255;
+        continue;
+      }
+      const src = (sy0 * w + sx0) * 4;
+      out[dst] = rgba[src];
+      out[dst + 1] = rgba[src + 1];
+      out[dst + 2] = rgba[src + 2];
+      out[dst + 3] = 255;
+    }
+  }
+  return { rgba: out, w: W, h: H };
+}
+
 function rotate180(rgba: Uint8ClampedArray, w: number, h: number): { rgba: Uint8ClampedArray; w: number; h: number } {
   const out = new Uint8ClampedArray(rgba.length);
   for (let y = 0; y < h; y++) {
@@ -112,6 +139,19 @@ describe("jab codec", () => {
     const rot = rotate180(img.rgba, img.width, img.height);
     const got = decodeJab(rot.rgba, rot.w, rot.h);
     expect(got).toEqual(payload);
+  });
+
+  it("decodes a code under non-uniform (16:9 → 4:3) camera scaling", () => {
+    const payload = dataOf(600, 77);
+    const m = encodeJab(payload);
+    const img = paintJab(m, 8, 4);
+    // 16:9 video drawn into a 4:3 decode box stretches vertically by 4/3.
+    const stretched = distort(img.rgba, img.width, img.height, 1, 4 / 3);
+    const got = decodeJab(stretched.rgba, stretched.w, stretched.h);
+    expect(got).toEqual(payload);
+    // And the horizontal-compression variant.
+    const squashed = distort(img.rgba, img.width, img.height, 3 / 4, 1);
+    expect(decodeJab(squashed.rgba, squashed.w, squashed.h)).toEqual(payload);
   });
 
   it("survives camera tint and brightness shifts", () => {

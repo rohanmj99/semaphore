@@ -382,21 +382,23 @@ function sampleModule(
   h: number,
   left: number,
   top: number,
-  scale: number,
+  sx: number,
+  sy: number,
   mx: number,
   my: number,
 ): [number, number, number] {
-  const cx = left + (mx + 0.5) * scale;
-  const cy = top + (my + 0.5) * scale;
-  const rw = Math.max(0, Math.floor(scale * 0.28));
+  const cx = left + (mx + 0.5) * sx;
+  const cy = top + (my + 0.5) * sy;
+  const rx = Math.max(0, Math.floor(sx * 0.28));
+  const ry = Math.max(0, Math.floor(sy * 0.28));
   let r = 0;
   let g = 0;
   let b = 0;
   let count = 0;
-  for (let dy = -rw; dy <= rw; dy++) {
+  for (let dy = -ry; dy <= ry; dy++) {
     const py = Math.round(cy + dy);
     if (py < 0 || py >= h) continue;
-    for (let dx = -rw; dx <= rw; dx++) {
+    for (let dx = -rx; dx <= rx; dx++) {
       const px = Math.round(cx + dx);
       if (px < 0 || px >= w) continue;
       const i = (py * w + px) * 4;
@@ -590,6 +592,9 @@ export function decodeJab(
   // Module scale from the arm's stripe columns: the border column plus
   // black-stripe columns at module offsets 1, 3, 5 (spaced 2 modules apart).
   // The arm sits on the left (unrotated) or on the right (rotated 180°).
+  // Camera frames are scaled non-uniformly (a 16:9 sensor shown in a 4:3
+  // box), so the horizontal module size comes from the columns and the
+  // vertical one from the top-arm rows — each axis measured on its own.
   const scanSpan = Math.max(64, Math.floor(bw * 0.15));
   const stripeScale = (from: number, dir: 1 | -1): number | null => {
     // Column darkness across the code height: arm modules are 1 module wide
@@ -605,6 +610,24 @@ export function decodeJab(
       }
       dark.push(d / bh > 0.45);
     }
+    return armScale(dark);
+  };
+  const rowScale = (from: number, dir: 1 | -1): number | null => {
+    // Row darkness across the code width — the top arm reads dark(2)
+    // light(1) dark(1) light(1) dark(1) in modules along the y axis.
+    const dark: boolean[] = [];
+    for (let k = 0; k <= scanSpan && k < bh; k++) {
+      const y = from + dir * k;
+      let d = 0;
+      for (let x = left; x <= right; x++) {
+        const i = (y * w + x) * 4;
+        if (isDark(rgba[i], rgba[i + 1], rgba[i + 2])) d++;
+      }
+      dark.push(d / bw > 0.45);
+    }
+    return armScale(dark);
+  };
+  const armScale = (dark: boolean[]): number | null => {
     const runs: Array<{ dark: boolean; len: number }> = [];
     for (const d of dark) {
       if (runs.length > 0 && runs[runs.length - 1].dark === d) runs[runs.length - 1].len++;
@@ -623,18 +646,28 @@ export function decodeJab(
     }
     return s;
   };
-  let scale = stripeScale(left, 1);
+  let scaleX = stripeScale(left, 1);
   let rotated = false;
-  if (scale === null) {
-    scale = stripeScale(right, -1);
-    if (scale === null) return null;
+  if (scaleX === null) {
+    scaleX = stripeScale(right, -1);
+    if (scaleX === null) return null;
     rotated = true;
   }
+  let scaleY = rowScale(rotated ? bottom : top, rotated ? -1 : 1);
+  if (scaleY === null) return null;
 
   // Grid size from the bounding box — must be one of the supported sizes.
-  const n = Math.round(bw / scale);
-  if (Math.abs(bw / scale - n) > 0.35 || Math.abs(bh / scale - n) > 0.35) return null;
+  // The stripe runs give the module size in pixels; at fractional scales the
+  // measured runs round to whole pixels (±~1 px), so compare the bbox's
+  // implied scale (bbox/n) against the measured one instead of demanding
+  // bbox/scale to be an exact integer.
+  const n = Math.round(bw / scaleX);
+  if (Math.abs(bw / n - scaleX) > 1.25 || Math.abs(bh / n - scaleY) > 1.25) return null;
   if (!JAB_SIDES.includes((n - 14) as (typeof JAB_SIDES)[number])) return null;
+  // Sample with the bbox-implied module size: the measured runs round to
+  // whole pixels and would drift across the grid at fractional scales.
+  scaleX = bw / n;
+  scaleY = bh / n;
 
   // Quiet zone must be white — rejects dark backgrounds.
   const quiet = bandMean(rgba, w, h, left, top, right, bottom, true);
@@ -642,7 +675,7 @@ export function decodeJab(
 
   // Black reference from the top border row (all black); white from the
   // quiet zone — both invariant to arm stripes and data content.
-  const bcy = top + Math.floor(scale / 2);
+  const bcy = top + Math.floor(scaleY / 2);
   let blkR = 0;
   let blkG = 0;
   let blkB = 0;
@@ -660,7 +693,7 @@ export function decodeJab(
   const colors = new Uint8Array(n * n);
   for (let y = 0; y < n; y++) {
     for (let x = 0; x < n; x++) {
-      const [r, g, b] = sampleModule(rgba, w, h, left, top, scale, x, y);
+      const [r, g, b] = sampleModule(rgba, w, h, left, top, scaleX, scaleY, x, y);
       colors[y * n + x] = classify(r, g, b, black, quiet);
     }
   }
