@@ -213,9 +213,7 @@ export function ReceiveFlow() {
   const consumedLink = useRef(false);
   const chosenChannel = useRef<ScannedSession["channel"] | "online" | null>(null);
   const [scanIssue, setScanIssue] = useState("");
-  const [nearbyOn, setNearbyOn] = useState(true);
-  const [micOn, setMicOn] = useState(false);
-  const [camOn, setCamOn] = useState(false);
+  const [listenMode, setListenMode] = useState<"none" | "loopback" | "sound" | "light">("none");
   const [camFacing, setCamFacing] = useState<CameraFacing | null>(null);
   const [camSeen, setCamSeen] = useState(false);
   const [pendingPermission, setPendingPermission] = useState<"mic" | "cam" | null>(null);
@@ -254,8 +252,8 @@ export function ReceiveFlow() {
   };
 
   const toggleMic = async () => {
-    if (micOn) {
-      setMicOn(false);
+    if (listenMode === "sound") {
+      setListenMode("none");
       return;
     }
     if (typeof navigator.mediaDevices?.getUserMedia !== "function") {
@@ -266,7 +264,8 @@ export function ReceiveFlow() {
     try {
       const s = await navigator.mediaDevices.getUserMedia({ audio: true });
       s.getTracks().forEach((t) => t.stop());
-      setMicOn(true);
+      setScanIssue("");
+      setListenMode("sound");
     } catch {
       setScanIssue("Microphone access was blocked. Allow mic permission in the browser to receive tones.");
     } finally {
@@ -275,8 +274,8 @@ export function ReceiveFlow() {
   };
 
   const toggleCam = async () => {
-    if (camOn) {
-      setCamOn(false);
+    if (listenMode === "light") {
+      setListenMode("none");
       return;
     }
     if (typeof navigator.mediaDevices?.getUserMedia !== "function") {
@@ -289,12 +288,31 @@ export function ReceiveFlow() {
         video: { facingMode: camFacing ?? "environment" },
       });
       s.getTracks().forEach((t) => t.stop());
-      setCamOn(true);
+      setScanIssue("");
+      setListenMode("light");
     } catch {
       setScanIssue("Camera access was blocked. Allow camera permission in the browser to receive screen flashes.");
     } finally {
       setPendingPermission(null);
     }
+  };
+
+  const pickMode = async (mode: "loopback" | "sound" | "light") => {
+    setScanIssue("");
+    if (listenMode === mode) {
+      setListenMode("none");
+      return;
+    }
+    if (mode === "loopback") {
+      if (!pairingSupported()) {
+        setScanIssue("Nearby tabs aren't available in this browser.");
+        return;
+      }
+      setListenMode("loopback");
+      return;
+    }
+    if (mode === "sound") await toggleMic();
+    else await toggleCam();
   };
 
   useEffect(() => {
@@ -327,12 +345,12 @@ export function ReceiveFlow() {
     const note = (msg: string) =>
       setScanIssue((prev) => (prev.includes(msg) ? prev : `${prev ? `${prev} ` : ""}${msg}`));
     const stops: Array<() => void> = [];
-    if (nearbyOn && pairingSupported()) stops.push(scanForSessions((l) => tag(l, "loopback")));
-    if (micOn && soundRxSupport()) {
+    if (listenMode === "loopback" && pairingSupported()) stops.push(scanForSessions((l) => tag(l, "loopback")));
+    if (listenMode === "sound" && soundRxSupport()) {
       const scan = scanSoundSessions((l) => tag(l, "sound"), note);
       stops.push(() => scan.stop());
     }
-    if (camOn && lightSupported()) {
+    if (listenMode === "light" && lightSupported()) {
       const scan = scanLightSessions(
         (l) => tag(l, "light"),
         note,
@@ -355,10 +373,10 @@ export function ReceiveFlow() {
     return () => {
       for (const stop of stops) stop();
     };
-    // Keyed by screen + toggles so the camera + mic are only active while the
+    // Keyed by screen + mode so the camera + mic are only active while the
     // user is listening; they are released as soon as a session is picked and
     // the matcher's own channel camera/mic take over.
-  }, [setReceiver, receiver.screen, nearbyOn, micOn, camOn]);
+  }, [setReceiver, receiver.screen, listenMode]);
 
   useEffect(() => {
     if (receiver.screen !== "transfer") return;
@@ -496,58 +514,75 @@ export function ReceiveFlow() {
         <>
           <h2>Receive</h2>
           <p className="hint">
-            Turn on a channel to start listening, then pick the same channel on the sending
-            device. You'll be asked for permission the first time.
+            Choose how the sender is sending — exactly one mode — then hold the devices
+            together. You'll be asked for permission the first time.
           </p>
           <div className="channeltoggles">
-            {pairingSupported() && (
-              <button
-                type="button"
-                className={`channeltoggle ${nearbyOn ? "on" : ""}`}
-                aria-pressed={nearbyOn}
-                onClick={() => setNearbyOn((v) => !v)}
-              >
-                <span className="ct-name">Nearby tabs</span>
-                <span className="ct-desc">Sessions announced by this same browser</span>
-                <span className="ct-state">{nearbyOn ? "listening" : "off"}</span>
-              </button>
-            )}
             <button
               type="button"
-              className={`channeltoggle ${micOn ? "on" : ""}`}
-              aria-pressed={micOn}
-              disabled={pendingPermission !== null}
-              onClick={() => void toggleMic()}
+              className={`channeltoggle ${listenMode === "loopback" ? "on" : ""}`}
+              aria-pressed={listenMode === "loopback"}
+              disabled={!pairingSupported() || pendingPermission !== null}
+              onClick={() => void pickMode("loopback")}
             >
-              <span className="ct-name">Microphone · tone bursts</span>
-              <span className="ct-desc">
-                Hear sessions announced as sound from another device's speaker
-              </span>
+              <span className="ct-name">Nearby tabs</span>
+              <span className="ct-desc">The sender is in another tab of this same browser</span>
               <span className="ct-state">
-                {micOn ? "listening" : pendingPermission === "mic" ? "asking for mic…" : "off"}
+                {listenMode === "loopback" ? "listening" : pairingSupported() ? "choose" : "unavailable"}
               </span>
             </button>
             <button
               type="button"
-              className={`channeltoggle ${camOn ? "on" : ""}`}
-              aria-pressed={camOn}
-              disabled={pendingPermission !== null}
-              onClick={() => void toggleCam()}
+              className={`channeltoggle ${listenMode === "sound" ? "on" : ""}`}
+              aria-pressed={listenMode === "sound"}
+              disabled={!soundRxSupport() || pendingPermission !== null}
+              onClick={() => void pickMode("sound")}
             >
-              <span className="ct-name">Camera · screen flash</span>
-              <span className="ct-desc">See sessions announced as flashing QR codes</span>
+              <span className="ct-name">Tone bursts</span>
+              <span className="ct-desc">The sender is playing tones from its speaker</span>
               <span className="ct-state">
-                {camOn ? "listening" : pendingPermission === "cam" ? "asking for camera…" : "off"}
+                {listenMode === "sound"
+                  ? "listening"
+                  : pendingPermission === "mic"
+                    ? "asking for mic…"
+                    : soundRxSupport()
+                      ? "choose"
+                      : "unavailable"}
+              </span>
+            </button>
+            <button
+              type="button"
+              className={`channeltoggle ${listenMode === "light" ? "on" : ""}`}
+              aria-pressed={listenMode === "light"}
+              disabled={!lightSupported() || pendingPermission !== null}
+              onClick={() => void pickMode("light")}
+            >
+              <span className="ct-name">Screen flash</span>
+              <span className="ct-desc">The sender is flashing QR codes on its screen</span>
+              <span className="ct-state">
+                {listenMode === "light"
+                  ? "listening"
+                  : pendingPermission === "cam"
+                    ? "asking for camera…"
+                    : lightSupported()
+                      ? "choose"
+                      : "unavailable"}
               </span>
             </button>
           </div>
-          {camOn && lightSupported() && (
-            <CameraBox previewRef={camPreviewRef} status={{ seen: camSeen, facing: camFacing }} onSwitch={() => void switchCam()} />
+          {listenMode === "light" && lightSupported() && (
+            <>
+              <CameraBox previewRef={camPreviewRef} status={{ seen: camSeen, facing: camFacing }} onSwitch={() => void switchCam()} />
+              <p className="hint">
+                Point the camera at the other screen's <strong>flashing QR codes</strong> — the
+                sender keeps re-broadcasting until the transfer arrives, so hold steady.
+              </p>
+            </>
           )}
-          {camOn && lightSupported() && (
+          {listenMode === "sound" && soundRxSupport() && (
             <p className="hint">
-              Point the camera at the other screen's <strong>flashing QR codes</strong> — the
-              sender keeps re-broadcasting until the transfer arrives, so hold steady.
+              Keep this screen open near the sending device's speaker — the tones carry the
+              session announcement and the file itself.
             </p>
           )}
           {scanIssue ? (
@@ -555,7 +590,7 @@ export function ReceiveFlow() {
               {scanIssue}
             </p>
           ) : null}
-          {nearbyOn || micOn || camOn ? (
+          {listenMode !== "none" ? (
             receiver.sessions.length > 0 ? (
               <div className="sessions">
                 {receiver.sessions.map((s) => (
@@ -582,7 +617,7 @@ export function ReceiveFlow() {
             )
           ) : (
             <p className="hint" aria-live="polite">
-              Enable a channel above to start listening.
+              Pick one mode above to start listening.
             </p>
           )}
           <div className="linkentry">
