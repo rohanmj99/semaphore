@@ -290,3 +290,6 @@ Update this file at the end of every working session. Dates below are session da
 - FIX: decode at the video's native resolution capped at 1280x960 (aspect-preserving single scale factor, so a 16:9 sensor stays 16:9 - no more forced 4:3 distortion). E2E mock camera is 480x480 so the synthetic path is unchanged.
 - Tests: new sensor-resolution cases - card at 0.4/0.3 of the frame, plus degraded (blur+noise+lift+cast) at 0.35 - ALL decode now, where the same geometry failed in the 640x480 box. Also fixed a renderScene bug: the scene now draws the card square (was stretching it to the scene's aspect in 16:9 scenes). 157 tests pass, tsc/build clean.
 - NEXT: deploy, verify hash, re-run e2e-light.mjs.
+
+## 2026-08-18 (9)
+- Deployed d0760fe (index-FyTyihON.js). e2e-light.mjs re-run on the deployed site: RESULT PASS (transfer + checksum 4de2c2fb intact).
