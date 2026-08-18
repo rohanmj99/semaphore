@@ -281,3 +281,6 @@ Update this file at the end of every working session. Dates below are session da
 - UI: scan feedback - LightScanHandle.fragmentsDecoded(); after 40+ scanned frames with zero decodes the receiver shows an actionable hint (bring closer, steady, whole card in frame, clean glare).
 - Regression tests: jab-camera-pipeline.test.ts now has 10 realistic camera cases (held closer/normal/far/farther, motion-blur, sensor-noise, bright-room, wb casts, combined). 156 tests pass, tsc/build clean.
 - NEXT: commit+push, deploy, verify hash, re-run e2e-light.mjs.
+
+## 2026-08-18 (7)
+- Deployed f1222f5 (index-DVG2Zbuj.js): arm-stripe sweep fallback + scan guidance hint. e2e-light.mjs re-run on the deployed site: RESULT PASS (transfer + checksum 4de2c2fb + picker assertions intact).
