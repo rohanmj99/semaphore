@@ -214,8 +214,14 @@ export function startCameraDecoder(
   onDecode: (payload: Uint8Array) => void,
   opts: { onError?: (message: string) => void; preview?: HTMLElement; facing?: CameraFacing } = {},
 ): CameraHandle {
-  const W = 640;
-  const H = 480;
+  // Decode at the video's native resolution (capped) instead of a fixed
+  // 640x480 box: phone sensors are 1920x1080+, and downscaling the whole
+  // frame 3x before decoding shrinks the code's modules below the readable
+  // size at normal hold distances. Native resolution keeps the aspect too.
+  const MAX_W = 1280;
+  const MAX_H = 960;
+  let W = 0;
+  let H = 0;
   let preview = opts.preview ?? null;
   let stream: MediaStream | null = null;
   let video: HTMLVideoElement | null = null;
@@ -250,11 +256,16 @@ export function startCameraDecoder(
 
   const tick = () => {
     if (stopped || !video || !canvas) return;
-    if (video.readyState >= 2) {
+    if (video.readyState >= 2 && video.videoWidth > 0) {
       const ctx = canvas.getContext("2d");
       if (ctx) {
-        canvas.width = W;
-        canvas.height = H;
+        if (W !== video.videoWidth || H !== video.videoHeight) {
+          const scale = Math.min(1, MAX_W / video.videoWidth, MAX_H / video.videoHeight);
+          W = Math.max(1, Math.round(video.videoWidth * scale));
+          H = Math.max(1, Math.round(video.videoHeight * scale));
+          canvas.width = W;
+          canvas.height = H;
+        }
         ctx.drawImage(video, 0, 0, W, H);
         frame++;
         if (frame % 3 === 0) {

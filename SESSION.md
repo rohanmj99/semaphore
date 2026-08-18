@@ -284,3 +284,9 @@ Update this file at the end of every working session. Dates below are session da
 
 ## 2026-08-18 (7)
 - Deployed f1222f5 (index-DVG2Zbuj.js): arm-stripe sweep fallback + scan guidance hint. e2e-light.mjs re-run on the deployed site: RESULT PASS (transfer + checksum 4de2c2fb + picker assertions intact).
+
+## 2026-08-18 (8) - SENSOR-RESOLUTION DECODE
+- User: real device still stuck on scanning - asks if the JAB code is being recognized. Root cause found: startCameraDecoder downscaled the whole video into a FIXED 640x480 canvas before decoding. Phone sensors are 1920x1080, so the code lost 3x pixels and at normal hold distances its modules shrank below the readable size (the 640-box probe already showed the 2-2.5px/module regime fails).
+- FIX: decode at the video's native resolution capped at 1280x960 (aspect-preserving single scale factor, so a 16:9 sensor stays 16:9 - no more forced 4:3 distortion). E2E mock camera is 480x480 so the synthetic path is unchanged.
+- Tests: new sensor-resolution cases - card at 0.4/0.3 of the frame, plus degraded (blur+noise+lift+cast) at 0.35 - ALL decode now, where the same geometry failed in the 640x480 box. Also fixed a renderScene bug: the scene now draws the card square (was stretching it to the scene's aspect in 16:9 scenes). 157 tests pass, tsc/build clean.
+- NEXT: deploy, verify hash, re-run e2e-light.mjs.
