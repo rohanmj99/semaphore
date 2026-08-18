@@ -270,3 +270,6 @@ Update this file at the end of every working session. Dates below are session da
 ## 2026-08-18 (4)
 - Receiver UX fix (local, NOT deployed): single-choice listen mode picker replacing the three independent toggles. No default selection (was Nearby tabs ON by default -> phone users stuck 'scanning' with the camera never started). Receiver now asks 'how is the sender sending?' - Nearby tabs / Tone bursts / Screen flash, exactly one mode, permission asked on pick. e2e-light.mjs rewritten to assert picker semantics (nothing default, mutual exclusion) + full QR-scan pair+transfer flow.
 - NEXT: commit+push, deploy, verify hash, run node e2e-light.mjs until PASS.
+
+## 2026-08-18 (5) - RECEIVER PICKER + QR SCAN E2E GREEN
+- Deployed f063546 (index-Ds0sz8jz.js): single-choice listen mode picker. e2e-light.mjs (rewritten) asserts: no default selection (Nearby tabs no longer pre-enabled), mutual exclusion between Nearby tabs/Tone bursts/Screen flash, then the FULL QR-scan flow (receiver camera decodes the sender's flashed card -> QR spotted -> session -> words -> match -> transfer -> Received + checksum -> sender Sent -> bytes/sha/ui checksum equal, zero console errors). RESULT: PASS x3 consecutive on the deployed site. First run flaked once on the 'QR spotted' wait (camera warm-up), recovered by the 5s poll.
