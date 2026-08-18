@@ -854,6 +854,8 @@ export function matchLightSession(
 export interface LightScanHandle {
   stop(): void;
   framesScanned(): number;
+  /** Number of frames that decoded into a JAB payload (0 = nothing seen). */
+  fragmentsDecoded(): number;
   /** Swap the scanning camera between front and back. */
   switchCamera(): Promise<boolean>;
   /** Current camera facing, or null when unavailable. */
@@ -917,6 +919,7 @@ export function scanLightSessions(
       camera.close();
     },
     framesScanned: () => camera.framesScanned,
+    fragmentsDecoded: () => camera.fragmentsDecoded,
     switchCamera: () => camera.switchCamera(),
     cameraFacing: () => camera.cameraFacing(),
     lastDecodeMs: () => camera.lastDecodeMs,

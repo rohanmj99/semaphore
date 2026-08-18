@@ -216,6 +216,7 @@ export function ReceiveFlow() {
   const [listenMode, setListenMode] = useState<"none" | "loopback" | "sound" | "light">("none");
   const [camFacing, setCamFacing] = useState<CameraFacing | null>(null);
   const [camSeen, setCamSeen] = useState(false);
+  const [scanStuck, setScanStuck] = useState(false);
   const [pendingPermission, setPendingPermission] = useState<"mic" | "cam" | null>(null);
   const lightScanRef = useRef<LightScanHandle | null>(null);
   const waitingCamRef = useRef<HTMLDivElement | null>(null);
@@ -358,9 +359,15 @@ export function ReceiveFlow() {
       );
       lightScanRef.current = scan;
       setCamFacing(scan.cameraFacing());
+      setScanStuck(false);
       const poll = setInterval(() => {
         const last = lightScanRef.current?.lastDecodeMs() ?? 0;
         setCamSeen(Date.now() - last < 2500);
+        const sc = lightScanRef.current?.framesScanned() ?? 0;
+        const dc = lightScanRef.current?.fragmentsDecoded() ?? 0;
+        // 40+ frames scanned with nothing decoded: the code is out of reach
+        // or the camera isn't seeing it — surface an actionable hint.
+        setScanStuck(sc > 40 && dc === 0);
       }, 600);
       stops.push(() => {
         clearInterval(poll);
@@ -573,10 +580,17 @@ export function ReceiveFlow() {
           {listenMode === "light" && lightSupported() && (
             <>
               <CameraBox previewRef={camPreviewRef} status={{ seen: camSeen, facing: camFacing }} onSwitch={() => void switchCam()} />
-              <p className="hint">
-                Point the camera at the other screen's <strong>flashing QR codes</strong> — the
-                sender keeps re-broadcasting until the transfer arrives, so hold steady.
-              </p>
+              {scanStuck ? (
+                <p className="hint warn" role="alert">
+                  No code spotted yet — bring the sender's screen closer, keep it steady, and keep
+                  the whole card inside the box. Clean reflections or glare off the glass if needed.
+                </p>
+              ) : (
+                <p className="hint">
+                  Point the camera at the other screen's <strong>flashing QR codes</strong> — the
+                  sender keeps re-broadcasting until the transfer arrives, so hold steady.
+                </p>
+              )}
             </>
           )}
           {listenMode === "sound" && soundRxSupport() && (

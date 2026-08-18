@@ -273,3 +273,11 @@ Update this file at the end of every working session. Dates below are session da
 
 ## 2026-08-18 (5) - RECEIVER PICKER + QR SCAN E2E GREEN
 - Deployed f063546 (index-Ds0sz8jz.js): single-choice listen mode picker. e2e-light.mjs (rewritten) asserts: no default selection (Nearby tabs no longer pre-enabled), mutual exclusion between Nearby tabs/Tone bursts/Screen flash, then the FULL QR-scan flow (receiver camera decodes the sender's flashed card -> QR spotted -> session -> words -> match -> transfer -> Received + checksum -> sender Sent -> bytes/sha/ui checksum equal, zero console errors). RESULT: PASS x3 consecutive on the deployed site. First run flaked once on the 'QR spotted' wait (camera warm-up), recovered by the 5s poll.
+
+## 2026-08-18 (6) - REAL-CAMERA ROBUSTNESS
+- User reports: receiver camera can't scan the JAB code on a real device (E2E used synthetic frames). Built camera-probe to simulate real conditions: card at distance (0.3-0.8 of frame), blur, noise, brightness lift, WB casts, through the two-stage bilinear pipeline.
+- Findings: full-frame and 0.8-0.4 distance decode OK; dist-0.5 FAILED - bilinear blur eats the thin light arm stripes past the 0.45 darkness threshold, so BOTH arm-scales return null and the decode bailed before trying candidates.
+- FIX: decodeJab sweep fallback - when arm-derived candidates are empty, sweep plausible module scales (2..9.75 step 0.25) against both axes' implied scale (bbox/n) for each JAB side; RS validation gates correctness. dist-0.5 now decodes. dist-0.3 (2.2px modules) and combined-far remain out of range - genuinely too small, user must hold closer.
+- UI: scan feedback - LightScanHandle.fragmentsDecoded(); after 40+ scanned frames with zero decodes the receiver shows an actionable hint (bring closer, steady, whole card in frame, clean glare).
+- Regression tests: jab-camera-pipeline.test.ts now has 10 realistic camera cases (held closer/normal/far/farther, motion-blur, sensor-noise, bright-room, wb casts, combined). 156 tests pass, tsc/build clean.
+- NEXT: commit+push, deploy, verify hash, re-run e2e-light.mjs.

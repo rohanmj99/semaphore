@@ -12,6 +12,93 @@ function dataOf(n: number, seed: number): Uint8Array {
   return out;
 }
 
+interface CameraJob {
+  label: string;
+  cardW: number;
+  cardH: number;
+  rgbaB64: string;
+  sceneW: number;
+  sceneH: number;
+  cardFrac: number;
+  blur: number;
+  noise: number;
+  lift: number;
+  cast: [number, number, number];
+}
+
+/** Renders a card the way a real camera sees it: the card sits in a larger
+ *  scene at some distance (cardFrac of the frame), optionally blurred,
+ *  noisy, brightened and color-cast, then the scene goes through the
+ *  receiver's two-stage bilinear pipeline (scene → 480×480 camera canvas →
+ *  640×480 decode box). Returns RGBA b64 ready for decodeJab. */
+async function renderScene(
+  browser: Awaited<ReturnType<typeof chromium.launch>>,
+  jobs: CameraJob[],
+): Promise<Array<{ label: string; b64: string }>> {
+  const page = await browser.newPage();
+  const results = await page.evaluate(async (jobs) => {
+    const out: Array<{ label: string; b64: string }> = [];
+    for (const j of jobs) {
+      try {
+        const bin = Uint8Array.from(atob(j.rgbaB64), (c) => c.charCodeAt(0));
+        const card = document.createElement("canvas");
+        card.width = j.cardW; card.height = j.cardH;
+        card.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(bin), j.cardW, j.cardH), 0, 0);
+        const scene = document.createElement("canvas");
+        scene.width = j.sceneW; scene.height = j.sceneH;
+        const sctx = scene.getContext("2d")!;
+        sctx.fillStyle = "#fff"; sctx.fillRect(0, 0, j.sceneW, j.sceneH);
+        const cw = Math.floor(j.sceneW * j.cardFrac);
+        const ch = Math.floor(j.sceneH * j.cardFrac);
+        sctx.drawImage(card, (j.sceneW - cw) / 2, (j.sceneH - ch) / 2, cw, ch);
+        if (j.blur > 0) {
+          const tmp = document.createElement("canvas");
+          tmp.width = j.sceneW; tmp.height = j.sceneH;
+          const tctx = tmp.getContext("2d")!;
+          tctx.filter = `blur(${j.blur}px)`;
+          tctx.drawImage(scene, 0, 0);
+          sctx.clearRect(0, 0, j.sceneW, j.sceneH);
+          sctx.drawImage(tmp, 0, 0);
+        }
+        const cam = document.createElement("canvas");
+        cam.width = 480; cam.height = 480;
+        const cctx = cam.getContext("2d")!;
+        cctx.fillStyle = "#fff"; cctx.fillRect(0, 0, 480, 480);
+        cctx.drawImage(scene, 0, 0, 480, 480);
+        const dec = document.createElement("canvas");
+        dec.width = 640; dec.height = 480;
+        const dctx = dec.getContext("2d")!;
+        dctx.fillStyle = "#fff"; dctx.fillRect(0, 0, 640, 480);
+        dctx.drawImage(cam, 0, 0, 640, 480);
+        const data = new Uint8Array(dctx.getImageData(0, 0, 640, 480).data);
+        if (j.noise > 0 || j.lift > 0 || j.cast[0] || j.cast[1] || j.cast[2]) {
+          let s = 777;
+          for (let i = 0; i < data.length; i += 4) {
+            if (j.noise > 0) {
+              s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+              const n = (s % (j.noise * 2 + 1)) - j.noise;
+              data[i] = Math.max(0, Math.min(255, data[i] + n));
+              data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + n));
+              data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + n));
+            }
+            data[i] = Math.max(0, Math.min(255, data[i] + j.lift + j.cast[0]));
+            data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + j.lift + j.cast[1]));
+            data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + j.lift + j.cast[2]));
+          }
+        }
+        let s2 = "";
+        for (let k = 0; k < data.length; k += 20000) s2 += String.fromCharCode(...data.subarray(k, k + 20000));
+        out.push({ label: j.label, b64: btoa(s2) });
+      } catch {
+        out.push({ label: j.label, b64: "" });
+      }
+    }
+    return out;
+  }, jobs);
+  await page.close();
+  return results;
+}
+
 describe("jab camera pipeline", () => {
   it("decodes a fountain-size symbol through the two-stage bilinear camera pipeline", async () => {
     // The receiver's real pipeline: the sender's card is painted into the
@@ -49,5 +136,43 @@ describe("jab camera pipeline", () => {
     await browser.close();
     const got = decodeJab(new Uint8ClampedArray(Buffer.from(b64, "base64")), 640, 480);
     expect(got).toEqual(payload);
+  });
+
+  it("survives real-camera conditions: distance, blur, noise, brightness and WB cast", async () => {
+    const payload = dataOf(1052, 42);
+    const m = encodeJab(payload);
+    const img = paintJab(m, 5, 4);
+    const base: CameraJob = {
+      label: "",
+      cardW: img.width,
+      cardH: img.height,
+      rgbaB64: Buffer.from(img.rgba).toString("base64"),
+      sceneW: 800,
+      sceneH: 800,
+      cardFrac: 0.8,
+      blur: 0,
+      noise: 0,
+      lift: 0,
+      cast: [0, 0, 0],
+    };
+    const cases: Array<CameraJob> = [
+      { ...base, label: "held-closer", cardFrac: 0.8 },
+      { ...base, label: "held-normal", cardFrac: 0.6 },
+      { ...base, label: "held-far", cardFrac: 0.5 },
+      { ...base, label: "held-farther", cardFrac: 0.4 },
+      { ...base, label: "motion-blur", blur: 0.5 },
+      { ...base, label: "sensor-noise", noise: 12 },
+      { ...base, label: "bright-room", lift: 25 },
+      { ...base, label: "wb-blue-cast", cast: [0, 0, 14] },
+      { ...base, label: "wb-warm-cast", cast: [10, 4, 0] },
+      { ...base, label: "combined", cardFrac: 0.5, blur: 0.4, noise: 10, lift: 12, cast: [4, 2, 0] },
+    ];
+    const browser = await chromium.launch({ headless: true });
+    const rendered = await renderScene(browser, cases);
+    await browser.close();
+    for (const r of rendered) {
+      const got = r.b64 ? decodeJab(new Uint8ClampedArray(Buffer.from(r.b64, "base64")), 640, 480) : null;
+      expect(got, r.label).toEqual(payload);
+    }
   });
 });

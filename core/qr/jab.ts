@@ -650,11 +650,9 @@ export function decodeJab(
   let rotated = false;
   if (scaleX === null) {
     scaleX = stripeScale(right, -1);
-    if (scaleX === null) return null;
-    rotated = true;
+    if (scaleX !== null) rotated = true;
   }
-  let scaleY = rowScale(rotated ? bottom : top, rotated ? -1 : 1);
-  if (scaleY === null) return null;
+  const scaleY = rotated ? rowScale(bottom, -1) : rowScale(top, 1);
 
   // Grid size from the bounding box — must be one of the supported sizes.
   // The stripe runs give the module size in pixels; at fractional scales the
@@ -664,14 +662,34 @@ export function decodeJab(
   // supported size is tested against both axes' implied scale (bbox/n).
   // Several sizes can fit within the 1.0 px tolerance; the decode is tried
   // with each (best fit first) and the first that validates wins.
-  const nCandidates = JAB_SIDES.map((side) => {
-    const cand = side + 14;
-    const ex = Math.abs(bw / cand - scaleX);
-    const ey = Math.abs(bh / cand - scaleY);
-    return { cand, ex, ey };
-  })
-    .filter((c) => c.ex <= 1.0 && c.ey <= 1.0)
-    .sort((a, b) => a.ex + a.ey - (b.ex + b.ey));
+  const nCandidates: Array<{ cand: number; ex: number; ey: number }> = [];
+  if (scaleX !== null && scaleY !== null) {
+    for (const side of JAB_SIDES) {
+      const cand = side + 14;
+      const ex = Math.abs(bw / cand - scaleX);
+      const ey = Math.abs(bh / cand - scaleY);
+      if (ex <= 1.0 && ey <= 1.0) nCandidates.push({ cand, ex, ey });
+    }
+    nCandidates.sort((a, b) => a.ex + a.ey - (b.ex + b.ey));
+  }
+  // Fallback: at small module sizes the camera blur eats the thin light arm
+  // stripes past the run-detection thresholds, so the arm scales can be null
+  // even though the bounding box is right. Sweep plausible module sizes
+  // against both axes' implied scale and add any side they fit — the RS
+  // validation in tryDecode keeps false candidates from ever returning data.
+  if (nCandidates.length === 0) {
+    for (const side of JAB_SIDES) {
+      const cand = side + 14;
+      for (let s = 2; s <= 9.75; s += 0.25) {
+        const ex = Math.abs(bw / cand - s);
+        const ey = Math.abs(bh / cand - s);
+        if (ex <= 1.0 && ey <= 1.0) {
+          nCandidates.push({ cand, ex, ey });
+          break;
+        }
+      }
+    }
+  }
   if (nCandidates.length === 0) return null;
   for (const cand of nCandidates) {
     const out = tryDecode(cand.cand);
