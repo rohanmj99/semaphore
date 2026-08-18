@@ -302,3 +302,6 @@ Update this file at the end of every working session. Dates below are session da
 - Tests: light.test.ts + light-pipeline.test.ts restored to QR era; fountain.test.ts swaps; NEW qr-camera-pipeline.test.ts (fountain symbol through the two-stage bilinear pipeline + 10 real-camera degradation cases at sensor res + far holds) - 143 tests pass, tsc/build clean.
 - E2E: e2e-light.mjs drives the QR-rate slider to 100ms for the mock camera (real default stays 500ms), Sent timeout 240s.
 - NEXT: commit+push from vercel-deploy, deploy, verify hash, run e2e-light.mjs to PASS.
+
+## 2026-08-18 (11)
+- Deployed 27e83a7 (index-DfC0Ci4K.js). Full QR E2E on the live site: RESULT PASS - QR spotted, words match, transfer + checksum 4de2c2fb, sha256 equal, sender Sent.
