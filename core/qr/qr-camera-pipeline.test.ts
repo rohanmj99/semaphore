@@ -1,16 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { chromium } from "playwright";
-import { decodeJab, encodeJab, paintJab } from "./jab.ts";
-
-function dataOf(n: number, seed: number): Uint8Array {
-  const out = new Uint8Array(n);
-  let s = seed >>> 0;
-  for (let i = 0; i < n; i++) {
-    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
-    out[i] = (s >>> 24) & 0xff;
-  }
-  return out;
-}
+import { decodeQr, fountainSymbol, paintQr, renderQr } from "./light.ts";
+import { FOUNTAIN_SYMBOL_CIPHER } from "./fountain.ts";
 
 interface CameraJob {
   label: string;
@@ -30,10 +21,11 @@ interface CameraJob {
 }
 
 /** Renders a card the way a real camera sees it: the card sits in a larger
- *  scene at some distance (cardFrac of the frame), optionally blurred,
+ *  scene at some distance (cardFrac of the frame height), optionally blurred,
  *  noisy, brightened and color-cast, then the scene goes through the
- *  receiver's two-stage bilinear pipeline (scene → 480×480 camera canvas →
- *  640×480 decode box). Returns RGBA b64 ready for decodeJab. */
+ *  receiver's camera pipeline (scene → camera canvas → decode box, or
+ *  straight through at sensor resolution). Returns RGBA b64 ready for
+ *  decodeQr. */
 async function renderScene(
   browser: Awaited<ReturnType<typeof chromium.launch>>,
   jobs: CameraJob[],
@@ -123,17 +115,16 @@ async function renderScene(
   return results;
 }
 
-describe("jab camera pipeline", () => {
+describe("qr camera pipeline", () => {
   it("decodes a fountain-size symbol through the two-stage bilinear camera pipeline", async () => {
     // The receiver's real pipeline: the sender's card is painted into the
     // camera canvas (480x480, bilinear), then the capture frame is stretched
-    // into the decode box (640x480, bilinear). The fractional module size
-    // (430px card / 78 modules ≈ 7.44 x 5.58 px) makes the measured arm runs
-    // round to whole pixels and biased short, which used to select the wrong
-    // grid side (66 instead of 64) and fail every decode.
-    const payload = dataOf(1052, 42);
-    const m = encodeJab(payload);
-    const img = paintJab(m, 5, 4);
+    // into the decode box (640x480, bilinear). A fountain symbol (448 bytes)
+    // is a version-17 QR (81 modules) — the largest thing the light channel
+    // shows (larger symbols produced version-27 codes that real cameras
+    // could not resolve).
+    const payload = fountainSymbol(16, 3, new Uint8Array(FOUNTAIN_SYMBOL_CIPHER).fill(0x5a));
+    const img = paintQr(renderQr(payload), 4, 4);
     const browser = await chromium.launch({ headless: true });
     const page = await browser.newPage();
     const b64 = await page.evaluate(async ({ rgbaB64, w, h }) => {
@@ -158,21 +149,24 @@ describe("jab camera pipeline", () => {
       return btoa(s);
     }, { rgbaB64: Buffer.from(img.rgba).toString("base64"), w: img.width, h: img.height });
     await browser.close();
-    const got = decodeJab(new Uint8ClampedArray(Buffer.from(b64, "base64")), 640, 480);
+    const got = decodeQr(new Uint8ClampedArray(Buffer.from(b64, "base64")), 640, 480);
     expect(got).toEqual(payload);
   });
 
   it("survives real-camera conditions: distance, blur, noise, brightness and WB cast", async () => {
-    const payload = dataOf(1052, 42);
-    const m = encodeJab(payload);
-    const img = paintJab(m, 5, 4);
+    // Rendered at sensor resolution (1280x720, direct) — the real capture
+    // path. The old 640x480 decode box is gone; at 640-wide mid-distance
+    // holds the modules fell below ~3.5px and jsQR's finder scan went
+    // marginal, which is exactly what the sensor-res fix removes.
+    const payload = fountainSymbol(16, 3, new Uint8Array(FOUNTAIN_SYMBOL_CIPHER).fill(0x5a));
+    const img = paintQr(renderQr(payload), 4, 4);
     const base: CameraJob = {
       label: "",
       cardW: img.width,
       cardH: img.height,
       rgbaB64: Buffer.from(img.rgba).toString("base64"),
-      sceneW: 800,
-      sceneH: 800,
+      sceneW: 1280,
+      sceneH: 720,
       cardFrac: 0.8,
       blur: 0,
       noise: 0,
@@ -180,34 +174,29 @@ describe("jab camera pipeline", () => {
       cast: [0, 0, 0],
     };
     const cases: Array<CameraJob> = [
-      { ...base, label: "held-closer", cardFrac: 0.8 },
-      { ...base, label: "held-normal", cardFrac: 0.6 },
-      { ...base, label: "held-far", cardFrac: 0.5 },
-      { ...base, label: "held-farther", cardFrac: 0.4 },
-      { ...base, label: "motion-blur", blur: 0.5 },
-      { ...base, label: "sensor-noise", noise: 12 },
-      { ...base, label: "bright-room", lift: 25 },
-      { ...base, label: "wb-blue-cast", cast: [0, 0, 14] },
-      { ...base, label: "wb-warm-cast", cast: [10, 4, 0] },
-      { ...base, label: "combined", cardFrac: 0.5, blur: 0.4, noise: 10, lift: 12, cast: [4, 2, 0] },
+      { ...base, label: "held-closer", cardFrac: 0.8, direct: true },
+      { ...base, label: "held-normal", cardFrac: 0.6, direct: true },
+      { ...base, label: "held-far", cardFrac: 0.5, direct: true },
+      { ...base, label: "held-farther", cardFrac: 0.4, direct: true },
+      { ...base, label: "motion-blur", blur: 0.5, direct: true },
+      { ...base, label: "sensor-noise", noise: 12, direct: true },
+      { ...base, label: "bright-room", lift: 25, direct: true },
+      { ...base, label: "wb-blue-cast", cast: [0, 0, 14], direct: true },
+      { ...base, label: "wb-warm-cast", cast: [10, 4, 0], direct: true },
+      { ...base, label: "combined", cardFrac: 0.5, blur: 0.4, noise: 10, lift: 12, cast: [4, 2, 0], direct: true },
     ];
     const browser = await chromium.launch({ headless: true });
     const rendered = await renderScene(browser, cases);
     await browser.close();
     for (const r of rendered) {
-      const got = r.b64 ? decodeJab(new Uint8ClampedArray(Buffer.from(r.b64, "base64")), 640, 480) : null;
+      const got = r.b64 ? decodeQr(new Uint8ClampedArray(Buffer.from(r.b64, "base64")), 1280, 720) : null;
       expect(got, r.label).toEqual(payload);
     }
   });
 
   it("decodes far-hold scenes at sensor resolution (no 640x480 downscale)", async () => {
-    // The camera decoder now decodes at the video's native resolution: a
-    // 1920x1080 sensor keeps the code ~3x bigger on the decode grid than the
-    // old fixed 640x480 box, which makes far holds readable. Render the scene
-    // directly at 1280x720 (the decoder's cap) and decode at that size.
-    const payload = dataOf(1052, 42);
-    const m = encodeJab(payload);
-    const img = paintJab(m, 5, 4);
+    const payload = fountainSymbol(16, 3, new Uint8Array(FOUNTAIN_SYMBOL_CIPHER).fill(0x5a));
+    const img = paintQr(renderQr(payload), 4, 4);
     const base: CameraJob = {
       label: "",
       cardW: img.width,
@@ -230,7 +219,7 @@ describe("jab camera pipeline", () => {
     const rendered = await renderScene(browser, cases);
     await browser.close();
     for (const r of rendered) {
-      const got = r.b64 ? decodeJab(new Uint8ClampedArray(Buffer.from(r.b64, "base64")), 1280, 720) : null;
+      const got = r.b64 ? decodeQr(new Uint8ClampedArray(Buffer.from(r.b64, "base64")), 1280, 720) : null;
       expect(got, r.label).toEqual(payload);
     }
   });

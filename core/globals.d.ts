@@ -48,3 +48,53 @@ declare module "libsodium-wrappers" {
   };
   export default sodium;
 }
+
+declare module "jsqr" {
+  interface QRCodeCoordinate {
+    x: number;
+    y: number;
+  }
+  interface QRCode {
+    binaryData: number[];
+    data: string;
+    chunks: Array<{ type: number; text: string }>;
+    version: number;
+    location: {
+      topRightCorner: QRCodeCoordinate;
+      topLeftCorner: QRCodeCoordinate;
+      bottomRightCorner: QRCodeCoordinate;
+      bottomLeftCorner: QRCodeCoordinate;
+      topRightFinderPattern: QRCodeCoordinate;
+      topLeftFinderPattern: QRCodeCoordinate;
+      bottomLeftFinderPattern: QRCodeCoordinate;
+      bottomRightFinderPattern: QRCodeCoordinate;
+    };
+  }
+  function jsQR(
+    data: Uint8ClampedArray,
+    width: number,
+    height: number,
+    providedOptions?: { inversionAttempts?: "dontInvert" | "onlyInvert" | "attemptBoth" | "invertFirst" },
+  ): QRCode | null;
+  export default jsQR;
+}
+
+declare module "qrcode/lib/core/qrcode" {
+  interface QrBitMatrix {
+    size: number;
+    data: Uint8Array;
+  }
+  interface QrCreateOptions {
+    errorCorrectionLevel?: "L" | "M" | "Q" | "H";
+    version?: number;
+    maskPattern?: number;
+    toSJISFunc?: (codePoint: string) => number;
+  }
+  const QRCode: {
+    create(
+      data: string | Array<{ data: string | Uint8Array; mode?: string }>,
+      options?: QrCreateOptions,
+    ): { modules: QrBitMatrix; version: number };
+  };
+  export default QRCode;
+}

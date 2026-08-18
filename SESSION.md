@@ -293,3 +293,12 @@ Update this file at the end of every working session. Dates below are session da
 
 ## 2026-08-18 (9)
 - Deployed d0760fe (index-FyTyihON.js). e2e-light.mjs re-run on the deployed site: RESULT PASS (transfer + checksum 4de2c2fb intact).
+
+## 2026-08-18 (10) - QR REVERT (user directive: JAB does not scan on the real device)
+- User: real device still stuck on scanning; revert to QR codes only, remove the JAB code, test fully.
+- Root cause of JAB failure found earlier (sensor-res fix) but user chose to abandon the custom codec. Reverted the light channel to the QR era (commit acf8e4d^): qrcode + jsqr deps restored (renderQr/paintQr/decodeQr + custom ink/paper/rounded design to dodge OS QR sniffers), jab.ts + jab tests deleted. Kept ALL later UX: single-choice listen picker, sensor-resolution capture, finite 6-pass broadcast, fragmentsDecoded + scanStuck hint.
+- Scannability investigation (new): jsQR is marginal below ~5px/module in the decode image - resampling phase chaos (synthetic sweeps: 50% pass rates). v27 QRs (133 modules) can never reach 5px/module in a 720-line capture -> SHRANK fountain symbols 1024B -> 420B (FOUNTAIN_SYMBOL_BYTES) so transfer QRs are version-17 (81 modules). Reliability sweep at 1280x720: decodes at EVERY card fraction 0.3-0.8 (2.4-6.5px/module) - chaos gone.
+- QrCard restored with SEMAPHORE_DESIGN (deep ink 23,20,36 / warm paper 248,246,240 / round 0.42). SendFlow: label back to QR speed, default frameMs 500 (real-camera pace; slider 100-1000ms).
+- Tests: light.test.ts + light-pipeline.test.ts restored to QR era; fountain.test.ts swaps; NEW qr-camera-pipeline.test.ts (fountain symbol through the two-stage bilinear pipeline + 10 real-camera degradation cases at sensor res + far holds) - 143 tests pass, tsc/build clean.
+- E2E: e2e-light.mjs drives the QR-rate slider to 100ms for the mock camera (real default stays 500ms), Sent timeout 240s.
+- NEXT: commit+push from vercel-deploy, deploy, verify hash, run e2e-light.mjs to PASS.

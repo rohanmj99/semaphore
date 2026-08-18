@@ -31,8 +31,12 @@ import { fountainSymbol, parseFountainSymbol } from "./light.ts";
  * same neighbors without any per-symbol metadata beyond the header.
  */
 
-/** Source symbol size (plaintext) — one symbol ≈ one QR payload. */
-export const FOUNTAIN_SYMBOL_BYTES = 1024;
+/** Source symbol size (plaintext) — one symbol ≈ one QR payload. Kept small
+ *  (QR version 17, 85 modules) so the transfer QR stays scannable: at ~4-5
+ *  pixels per module the camera decode is reliable, and 85-module QRs keep
+ *  that at normal hold distances on a phone screen. Larger symbols made
+ *  version-27 QRs (133 modules) that real cameras could not resolve. */
+export const FOUNTAIN_SYMBOL_BYTES = 420;
 /** Sealed symbol size = plaintext + AEAD tag. */
 export const FOUNTAIN_SYMBOL_CIPHER = FOUNTAIN_SYMBOL_BYTES + 16;
 /** Broadcast passes before the sender stops cycling (symbols are independent,

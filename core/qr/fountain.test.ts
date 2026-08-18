@@ -14,7 +14,7 @@ import {
   type SymbolEndpoint,
 } from "./fountain.ts";
 import { arraySource } from "../chunker.ts";
-import { encodeJab, paintJab } from "./jab.ts";
+import { paintQr, renderQr } from "./light.ts";
 
 function randomBytes(n: number, seed: number): Uint8Array {
   const out = new Uint8Array(n);
@@ -268,8 +268,8 @@ describe("light transport symbols + pacing", () => {
     const wire = fountainSymbol(16, 3, randomBytes(300, 8));
     const got: Array<{ k: number; id: number }> = [];
     const unsub = rx.onSymbol((s) => got.push({ k: s.k, id: s.id }));
-    const m = encodeJab(wire);
-    const img = paintJab(m, 6);
+    const m = renderQr(wire);
+    const img = paintQr(m, 6);
     rx.feedImage(img.rgba, img.width, img.height);
     expect(got).toEqual([{ k: 16, id: 3 }]);
     unsub();
@@ -281,8 +281,8 @@ describe("light transport symbols + pacing", () => {
     const delivered: Uint8Array[] = [];
     rx.onMessage((f) => delivered.push(f));
     const wire = fountainSymbol(4, 1, randomBytes(100, 6));
-    const m = encodeJab(wire);
-    const img = paintJab(m, 6);
+    const m = renderQr(wire);
+    const img = paintQr(m, 6);
     rx.feedImage(img.rgba, img.width, img.height);
     expect(delivered).toEqual([]);
     rx.close();

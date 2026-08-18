@@ -58,13 +58,17 @@ function WordChips({ pair }: { pair: string }) {
   );
 }
 
+/** Light channel default display pace: long enough for a phone camera to
+ *  read a full QR between flashes. */
+const DEFAULT_QR_FRAME_MS = 500;
+
 /** Light channel: QR display rate. 1–10 fps (100–1000 ms per frame). */
 function FrameRateSlider({ frameMs, onChange }: { frameMs: number; onChange: (ms: number) => void }) {
   const fps = Math.round(1000 / frameMs);
   return (
     <label className="framerate">
       <span className="framerate-label">
-        Flash speed <strong>{fps} fps</strong>
+        QR speed <strong>{fps} fps</strong>
       </span>
       <input
         type="range"
@@ -124,7 +128,7 @@ function TransferScreen({
       )}
       {channel === "light" && (
         <>
-          <FrameRateSlider frameMs={frameMs ?? 100} onChange={onFrameMs} />
+          <FrameRateSlider frameMs={frameMs ?? DEFAULT_QR_FRAME_MS} onChange={onFrameMs} />
           <p className="hint">
             The flashes keep repeating until you cancel — the other phone picks up whatever
             it missed on the next pass.
@@ -241,7 +245,7 @@ export function SendFlow() {
         channel,
       );
       controllerRef.current = controller;
-      if (channel === "light") controller.setFrameMs(sender.frameMs ?? 100);
+      if (channel === "light") controller.setFrameMs(sender.frameMs ?? DEFAULT_QR_FRAME_MS);
       setSender({
         screen: "waiting",
         wordPair: controller.wordPair,
@@ -389,7 +393,7 @@ export function SendFlow() {
             <>
               {sender.channel === "light" && controllerRef.current?.display && (
                 <div className="qrcard-wrap">
-                  <QrCard transport={controllerRef.current.display} frameMs={sender.frameMs} />
+                  <QrCard transport={controllerRef.current.display} frameMs={sender.frameMs ?? DEFAULT_QR_FRAME_MS} />
                 </div>
               )}
               <WordChips pair={sender.wordPair} />
@@ -400,7 +404,7 @@ export function SendFlow() {
                     <strong>Receive</strong> — it should spot this transfer.
                   </p>
                   <FrameRateSlider
-                    frameMs={sender.frameMs ?? 100}
+                    frameMs={sender.frameMs ?? DEFAULT_QR_FRAME_MS}
                     onChange={(ms) => {
                       setSender({ frameMs: ms });
                       controllerRef.current?.setFrameMs(ms);

@@ -1,33 +1,34 @@
+import QRCode from "qrcode/lib/core/qrcode";
+import jsQR from "jsqr";
 import type { TransportEndpoint } from "../transports.ts";
 import { FrameParser, frameMessage } from "../frames.ts";
 import { createSessionId, deriveKxSessionKey, fingerprint, keypair, wordPair } from "../crypto.ts";
 import { crc16 } from "../crc16.ts";
 import { fromBase64Url, nextId, toBase64Url } from "../util.ts";
-import { decodeJab } from "./jab.ts";
 import type { SessionAnnouncement, VisibleSession } from "../pairing.ts";
 
 /**
- * Light channel — animated JAB (8-color matrix) transport.
+ * Light channel — animated QR transport.
  *
- * Wire messages are split into fragments, one per JAB frame. The sender
- * displays one frame at a time (the UI cycles the fragment buffer every few
+ * Wire messages are split into fragments, one per QR code. The sender
+ * displays one QR at a time (the UI cycles the fragment buffer every few
  * seconds); the receiver's camera scans continuously, decodes fragments and
  * reassembles messages. Like the sound channel there is a broadcast repair
  * model: while a message is current, its fragments are cycled forever, so a
- * missed frame is picked up on the next pass.
+ * missed QR is picked up on the next pass.
  */
 
 export const LIGHT_FRAG_MAGIC1 = 0x53; // 'S'
 export const LIGHT_FRAG_MAGIC2 = 0x51; // 'Q'
-/** Total JAB frame payload bytes (6-byte header + data). */
+/** Total QR payload bytes (6-byte header + data). */
 export const LIGHT_FRAG_SIZE = 1400;
-/** Data bytes per JAB frame. */
+/** Data bytes per QR fragment. */
 export const LIGHT_FRAG_CAP = LIGHT_FRAG_SIZE - 6;
-/** Recommended display pace between JAB frames. */
+/** Recommended display pace between QR frames. */
 export const LIGHT_FRAME_MS = 2500;
 
 /**
- * Split one wire message into JAB payloads:
+ * Split one wire message into QR payloads:
  * [0x53][0x51][totalHi][totalLo][seq][len][data...]
  */
 export function fragmentLight(frame: Uint8Array): Uint8Array[] {
@@ -48,8 +49,7 @@ export function fragmentLight(frame: Uint8Array): Uint8Array[] {
 }
 
 /**
- * Fountain symbols — one JAB frame per encoded symbol, no fragmentation or
- * ordering.
+ * Fountain symbols — one QR per encoded symbol, no fragmentation or ordering.
  *
  * Each symbol is its own broadcast unit: the header carries the total symbol
  * count K (2 bytes), the encoded symbol id (4 bytes), the payload length and a
@@ -66,7 +66,7 @@ export const FOUNTAIN_HEADER = 12;
 export const FOUNTAIN_MAX_K = 0xffff;
 export const FOUNTAIN_MAX_PAYLOAD = LIGHT_FRAG_SIZE - FOUNTAIN_HEADER;
 
-/** Wrap an encoded symbol payload as a self-contained JAB payload. */
+/** Wrap an encoded symbol payload as a self-contained QR payload. */
 export function fountainSymbol(k: number, id: number, data: Uint8Array): Uint8Array {
   if (data.length < 1 || data.length > FOUNTAIN_MAX_PAYLOAD) {
     throw new Error(`fountain symbol payload ${data.length} out of range`);
@@ -173,9 +173,99 @@ export class QrReassembler {
 }
 
 /* ------------------------------------------------------------------ */
-/* Codec note: rendering + decoding of the 8-color JAB matrix is        */
-/* implemented in ./jab.ts (encodeJab / paintJab / decodeJab). The      */
-/* camera pipeline below decodes frames straight from camera pixels.    */
+/* QR rendering + decoding                                             */
+
+export interface QrMatrix {
+  size: number;
+  bits: Uint8Array;
+}
+
+/**
+ * Encode bytes as a QR module matrix (byte mode, error correction M).
+ * Throws if the payload is too large to fit a QR code.
+ */
+export function renderQr(data: Uint8Array, errorCorrectionLevel: "L" | "M" | "Q" | "H" = "M"): QrMatrix {
+  const qr = QRCode.create([{ data, mode: "byte" }], { errorCorrectionLevel });
+  const m = qr.modules as { size: number; data: Uint8Array };
+  return { size: m.size, bits: new Uint8Array(m.data.buffer, m.data.byteOffset, m.data.byteLength) };
+}
+
+export interface QrDesign {
+  /** Module ink color, default black. */
+  ink?: readonly [number, number, number];
+  /** Paper (background) color, default white. */
+  paper?: readonly [number, number, number];
+  /** Module corner rounding as a fraction of a module (0–0.5). */
+  round?: number;
+}
+
+/**
+ * Rasterize a module matrix to RGBA pixels (black modules, white background,
+ * with a surrounding quiet zone). Pure computation — works in tests and on
+ * canvas via putImageData. A custom design (ink/paper color, rounded module
+ * corners) keeps the QR decodable — jsQR only needs dark/light contrast.
+ */
+export function paintQr(
+  matrix: QrMatrix,
+  scale = 8,
+  quiet = 4,
+  design: QrDesign = {},
+): { width: number; height: number; rgba: Uint8ClampedArray<ArrayBuffer> } {
+  const n = matrix.size;
+  const size = (n + quiet * 2) * scale;
+  const ink = design.ink ?? [0, 0, 0];
+  const paper = design.paper ?? [255, 255, 255];
+  const r = Math.max(0, Math.min(0.5, design.round ?? 0)) * scale;
+  const rgba = new Uint8ClampedArray(size * size * 4);
+  const set = (x: number, y: number, v: readonly [number, number, number]) => {
+    const i = (y * size + x) * 4;
+    rgba[i] = v[0];
+    rgba[i + 1] = v[1];
+    rgba[i + 2] = v[2];
+    rgba[i + 3] = 255;
+  };
+  for (let i = 0; i < size * size; i++) {
+    rgba[i * 4] = paper[0];
+    rgba[i * 4 + 1] = paper[1];
+    rgba[i * 4 + 2] = paper[2];
+    rgba[i * 4 + 3] = 255;
+  }
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      if ((matrix.bits[y * n + x] & 1) === 0) continue;
+      const px = (x + quiet) * scale;
+      const py = (y + quiet) * scale;
+      for (let dy = 0; dy < scale; dy++) {
+        for (let dx = 0; dx < scale; dx++) {
+          let dark = true;
+          if (r > 0) {
+            // Distance to the nearest module edge — rounded corners cut the
+            // pixels past the corner radius.
+            const nx = Math.min(dx, scale - 1 - dx);
+            const ny = Math.min(dy, scale - 1 - dy);
+            if (nx < r && ny < r) {
+              const cx = r - nx - 0.5;
+              const cy = r - ny - 0.5;
+              if (cx * cx + cy * cy > r * r) dark = false;
+            }
+          }
+          if (dark) set(px + dx, py + dy, ink);
+        }
+      }
+    }
+  }
+  return { width: size, height: size, rgba };
+}
+
+/**
+ * Decode a QR code from raw RGBA pixels. Returns the raw byte payload, or
+ * null if nothing could be decoded.
+ */
+export function decodeQr(rgba: Uint8ClampedArray, width: number, height: number): Uint8Array | null {
+  const found = jsQR(rgba, width, height, { inversionAttempts: "attemptBoth" });
+  if (!found) return null;
+  return new Uint8Array(found.binaryData);
+}
 
 export type CameraFacing = "environment" | "user";
 
@@ -206,7 +296,7 @@ export function lightSupported(): boolean {
 }
 
 /**
- * Scan a video stream for JAB frames. Decoded raw payloads are passed to onDecode.
+ * Scan a video stream for QRs. Decoded raw payloads are passed to onDecode.
  * The camera keeps running until stop() is called. If the camera is not
  * available, onError is fired (once) and a no-op handle is returned.
  */
@@ -272,7 +362,7 @@ export function startCameraDecoder(
           const img = ctx.getImageData(0, 0, W, H);
           scanned++;
           try {
-            const payload = decodeJab(img.data, W, H);
+            const payload = decodeQr(img.data, W, H);
             if (payload) {
               lastDecode = Date.now();
               onDecode(payload);
@@ -417,7 +507,7 @@ export interface LightTransportOptions {
   camera?: boolean;
   preview?: HTMLElement;
   facing?: CameraFacing;
-  /** JAB display pace in ms; the transfer frame rate. Defaults to LIGHT_FRAME_MS. */
+  /** QR display pace in ms; the transfer frame rate. Defaults to LIGHT_FRAME_MS. */
   frameMs?: number;
 }
 
@@ -483,7 +573,7 @@ export class LightTransport implements TransportEndpoint {
     this.cam?.attachPreview(el);
   }
 
-  /** The JAB fragment currently on display, or null while idle. */
+  /** The QR fragment currently on display, or null while idle. */
   currentFrag(): Uint8Array | null {
     return this.frags.length > 0 ? this.frags[this.cursor] : null;
   }
@@ -513,7 +603,7 @@ export class LightTransport implements TransportEndpoint {
     this.cursor = 0;
   }
 
-  /** Display one fountain symbol as a single JAB frame (no fragmentation). */
+  /** Display one fountain symbol as a single QR frame (no fragmentation). */
   sendSymbol(payload: Uint8Array): void {
     if (this.closed || !this.txOn) return;
     this.frags = [payload];
@@ -526,7 +616,7 @@ export class LightTransport implements TransportEndpoint {
     this.rescanned++;
     let payload: Uint8Array | null = null;
     try {
-      payload = decodeJab(rgba, width, height);
+      payload = decodeQr(rgba, width, height);
     } catch {
       payload = null;
     }
@@ -865,7 +955,7 @@ export function matchLightSession(
 export interface LightScanHandle {
   stop(): void;
   framesScanned(): number;
-  /** Number of frames that decoded into a JAB payload (0 = nothing seen). */
+  /** Number of frames that decoded into a QR payload (0 = nothing seen). */
   fragmentsDecoded(): number;
   /** Swap the scanning camera between front and back. */
   switchCamera(): Promise<boolean>;
