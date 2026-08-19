@@ -5,7 +5,33 @@ Update this file at the end of every working session. Dates below are session da
 
 ---
 
-## Latest state — 2026-08-17 — ONLINE CHANNEL "PEER STOPPED RESPONDING" BUG FIXED (chunk frames exceeded the 256 KiB SCTP datachannel limit; transport now fragments+reassembles); commit TBD
+## Latest state — 2026-08-18 — LIGHT CHANNEL REVERTED TO QR CODES (JAB removed), deployed & E2E-passing; user closed session before re-testing on the real phone
+
+### Where we are
+- User directive: "revert it to using qr codes only, remove the jab code, it doesnt work, do it, then test it fully." DONE: JAB codec deleted; light channel back on qrcode (encode) + jsQR (decode); deployed at `https://semaphore-tau.vercel.app` (bundle `index-DfC0Ci4K.js`, commit 27e83a7, pushed 2026-08-18 ~13:05 IST). Full E2E on the live site: RESULT PASS (QR spotted, words match, 64 KB transfer, checksum 4de2c2fb, sha256 equal, sender Sent).
+- **OPEN ITEM (the user's core problem)**: the user's real phone previously showed "scanning for qr code" forever (JAB era AND the first QR attempt before the sensor-res fix). The QR revert + fixes are deployed but the user has NOT yet reported whether Screen flash scanning now works on the real device. The next session should ask the user to retry: Send → Screen flash; Receive → Screen flash; hold the receiver ~10-15cm from the sender's screen so the card fills most of the frame; the hint under the camera says what to adjust if it stalls. If it still fails, next debugging steps are below.
+
+### Important details / workflow constraints
+- Commit/push ONLY from `D:\Projects\Semaphore\vercel-deploy`; Vercel auto-deploys on push. Never commit `KV_REST_API_*` keys. Keep SESSION.md in both trees.
+- Robocopy: `/MIR /XD node_modules .git .vercel dist vercel-deploy /XF e2e-online.mjs rtc-probe.mjs dcsize-probe.mjs dcsize2.mjs e2e-light.mjs` (keeps e2e-light.mjs out of the sync).
+- Root strays: `e2e-light.mjs` (intentional, excluded from sync); nothing else pending. Temp diag tests must be deleted after use.
+- Flow (E2E-tested): sender `Send` → pick file → `Screen flash` → `.qrcard` flashes (QR with SEMAPHORE_DESIGN: ink 23,20,36 / paper 248,246,240 / round 0.42) → words `.pairchip`; receiver `Receive` → picker `.channeltoggle` (single choice, nothing pre-selected, aria-pressed) → Screen flash → `.sessionbtn` → "Check the words" → "These words match" → sender "It's a match" → "Start sending" → receiver "Received" → sender "Sent" (after NO_ACK_PASSES=6 broadcast passes).
+- E2E harness: `node e2e-light.mjs` (root, excluded from sync) against the deployed site. `getUserMedia` mocked via `canvas.captureStream(30)`, canvases in `window.__camCanvases`; `pumpTo(fromSel, toPage)` copies `.qrcard` canvases between pages every 300ms; the test now drives the sender's `input[aria-label="QR frame rate"]` slider to 100ms (mock camera keeps up; REAL default is 500ms); "Sent" timeout 240s. Run until RESULT: PASS.
+- Codec facts: `renderQr/paintQr/decodeQr` in `core/qr/light.ts`; fountain symbols now `FOUNTAIN_SYMBOL_BYTES = 420` in `core/qr/fountain.ts` → 448B payload → QR version 17 (81 modules) — chosen because v27 (133-module) QRs could not be resolved by cameras (jsQR marginal below ~5px/module; version-17 QRs decode at every tested card fraction 0.3-0.8 of the frame at 1280x720). `LIGHT_FRAME_MS = 2500`, SendFlow default `DEFAULT_QR_FRAME_MS = 500`.
+- Camera capture decodes at the video's NATIVE resolution capped 1280x960 (aspect-preserving single scale; `MAX_W=1280, MAX_H=960` in startCameraDecoder) — the old fixed 640x480 box was a real-device failure cause; decode every 3rd rAF frame; scanStuck hint in ReceiveFlow fires when scanned>40 && decoded==0 (warn role=alert).
+- Tests: 143 pass (17 files) incl. `core/qr/qr-camera-pipeline.test.ts` (two-stage bilinear pipeline + 10 sensor-res degradation cases + far holds), light.test.ts/light-pipeline.test.ts restored to QR era. `npx tsc --noEmit` clean, `npm run build` clean.
+- Git history references: acf8e4d = JAB commit (now reverted in effect); 27e83a7 = the QR revert; 5016c18 = session log.
+
+### If the real device still fails to scan (proposed next steps, in order)
+1. Reproduce: ask the user what exactly shows on the receiver (preview visible? hint text? "QR spotted" ever appears? which phone/OS?). The mock E2E cannot reproduce optical camera capture — real-device feedback is essential.
+2. Check getUserMedia constraint result: `video.videoWidth/Height` on the real device; the decode box size derives from it (`W/H` in the tick). If a device delivers e.g. 640x480, the module sizes collapse again (threshold ~5px/module incl. quiet, card must fill ≥0.55 of the frame for v17).
+3. If jsQR is too slow on large frames (1920x1080 at 10 decodes/s), throttle decode to every Nth frame or cap the canvas at 1280x720.
+4. Consider `frameMs`: if the sender's screen is scanned mid-transition the finder patterns smear — 500ms default should be OK; slower = more reliable.
+5. OS QR-sniffer interference was the original reason for JAB; the custom ink/paper/rounded design is the QR-era mitigation. If the phone's OS camera UI pops up over the app, that is OS behavior, not the app.
+
+---
+
+## Previous chapters (2026-08-17) — ONLINE CHANNEL "PEER STOPPED RESPONDING" BUG FIXED (chunk frames exceeded the 256 KiB SCTP datachannel limit; transport now fragments+reassembles); commit TBD
 
 ### 2026-08-17 (evening) — Live E2E of the deployed site found a real online-channel bug; fixed + regression-tested
 - **User directive**: "did you test the online version? …the vercel website online test" → build a Playwright E2E of the live site `https://semaphore-tau.vercel.app` (online channel uses a share link — no QR/camera — so it's automatable).
